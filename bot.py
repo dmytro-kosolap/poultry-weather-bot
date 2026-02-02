@@ -28,7 +28,7 @@ ADMIN_ID = 708323174
 GROUP_ID = -1001761937362
 
 # Налаштування Бота через змінні оточення
-bot = Bot(token=os.getenv("BOT_TOKEN"))
+bot = Bot(token=os.getenv("8049414176:AAGXfxG611y9L2p4wNX1VrhZQlXxH_YGiog"))
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
 
@@ -116,5 +116,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
