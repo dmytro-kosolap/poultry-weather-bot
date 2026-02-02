@@ -1,5 +1,6 @@
-aiogram
+aiogram==3.4.1
 requests
 python-dotenv
 google-generativeai
 apscheduler
+
