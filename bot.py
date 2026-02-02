@@ -15,7 +15,7 @@ load_dotenv()
 
 # Налаштування Gemini
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel('models/gemini-2.5-flash')
+model = genai.GenerativeModel('models/gemini-1.5-flash')
 
 # Твої ID
 ADMIN_ID = 708323174
@@ -125,4 +125,5 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
+
     asyncio.run(main())
