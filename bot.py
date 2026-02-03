@@ -9,8 +9,13 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from google import genai
 import logging
+import os
+from dotenv import load_dotenv
 
-# Налаштування логування у файл
+# Завантажуємо змінні з .env
+load_dotenv()
+
+# Налаштування логування
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -21,146 +26,115 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# === ТВОЇ ДАНІ ===
-TOKEN = "8049414176:AAGDwkRxqHU3q9GdZPleq3c4-V2Aep3nipw"
-WEATHER_KEY = "d51d1391f46e9ac8d58cf6a1b908ac66"
-GEMINI_KEY = "AIzaSyCI6btpcCFZIrrsq9CzaVMwnb3ckpztpk0"
+# === КЛЮЧІ З .env ===
+TOKEN = os.getenv("BOT_TOKEN")
+WEATHER_KEY = os.getenv("WEATHER_KEY")
+GEMINI_KEY = os.getenv("GEMINI_KEY")
 
-# Налаштування Gemini (нова бібліотека)
+if not all([TOKEN, WEATHER_KEY, GEMINI_KEY]):
+    logger.error("❌ Не знайдено всі ключі в .env!")
+    exit(1)
+
+logger.info("✅ Ключі завантажено")
+
+# Налаштування Gemini
 client = genai.Client(api_key=GEMINI_KEY)
-
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Словник іконок (автоматично підбирається за описом погоди)
 ICONS = {
-    "ясно": "☀️", 
-    "хмарно": "☁️", 
-    "хмарність": "⛅", 
-    "дощ": "🌧", 
-    "сніг": "❄️", 
-    "туман": "🌫", 
-    "злива": "🌦",
-    "гроза": "⛈"
+    "ясно": "☀️", "хмарно": "☁️", "хмарність": "⛅",
+    "дощ": "🌧", "сніг": "❄️", "туман": "🌫",
+    "злива": "🌦", "гроза": "⛈"
 }
 
 async def get_weather_forecast():
-    cities_config = [
-        {"reg": "Центр",  "name": "Київ",     "eng": "Kyiv"},
-        {"reg": "Південь", "name": "Одеса",    "eng": "Odesa"},
-        {"reg": "Захід",  "name": "Львів",    "eng": "Lviv"},
-        {"reg": "Схід",   "name": "Харків",   "eng": "Kharkiv"},
+    cities = [
+        {"reg": "Центр", "name": "Київ", "eng": "Kyiv"},
+        {"reg": "Південь", "name": "Одеса", "eng": "Odesa"},
+        {"reg": "Захід", "name": "Львів", "eng": "Lviv"},
+        {"reg": "Схід", "name": "Харків", "eng": "Kharkiv"},
         {"reg": "Північ", "name": "Чернігів", "eng": "Chernihiv"}
     ]
     
-    tomorrow_dt = datetime.now() + timedelta(days=1)
-    date_rev = tomorrow_dt.strftime("%d-%m-%Y")
-    tomorrow_iso = tomorrow_dt.strftime("%Y-%m-%d")
+    tomorrow = datetime.now() + timedelta(days=1)
+    date_str = tomorrow.strftime("%d-%m-%Y")
+    iso_date = tomorrow.strftime("%Y-%m-%d")
     
-    report = f"📅 <b>ПОГОДА НА ЗАВТРА ({date_rev})</b>\n\n"
-    # Заголовок таблиці
+    report = f"📅 <b>ПОГОДА НА ЗАВТРА ({date_str})</b>\n\n"
     report += "<code>Регіон (Місто)      День | Ніч</code>\n"
-    
-    summary_text = ""
+    summary = ""
 
     async with aiohttp.ClientSession() as session:
-        for item in cities_config:
-            url = f"http://api.openweathermap.org/data/2.5/forecast?q={item['eng']}&appid={WEATHER_KEY}&units=metric&lang=uk"
+        for c in cities:
+            url = f"http://api.openweathermap.org/data/2.5/forecast?q={c['eng']}&appid={WEATHER_KEY}&units=metric&lang=uk"
             try:
-                async with session.get(url, timeout=10) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        day_temps = []
-                        descriptions = []
-                        
-                        for entry in data['list']:
-                            if tomorrow_iso in entry['dt_txt']:
-                                day_temps.append(entry['main']['temp'])
-                                descriptions.append(entry['weather'][0].get('description', 'хмарно'))
-                        
-                        if day_temps:
-                            d_t, n_t = round(max(day_temps)), round(min(day_temps))
-                            # Беремо опис погоди на 12:00 дня
-                            weather_desc = descriptions[len(descriptions)//2] if descriptions else "хмарно"
-                        else:
-                            d_t, n_t, weather_desc = 0, 0, "хмарно"
-                        
-                        # Вибір іконки
-                        icon = "☁️"  # Стандартна
-                        for key, emoji in ICONS.items():
-                            if key in weather_desc.lower():
-                                icon = emoji
-                                break
-                        
-                        def fmt(t):
-                            res = f"+{t}" if t > 0 else str(t)
-                            return res.rjust(4)
-
-                        city_part = f"{item['reg']} ({item['name']})".ljust(17)
-                        # Іконка ззовні <code>, щоб не збивати ширину символів
-                        report += f"{icon} <code>{city_part} {fmt(d_t)}° | {fmt(n_t)}°</code>\n"
-                        summary_text += f"{item['name']}: {d_t}/{n_t}C. "
+                async with session.get(url, timeout=10) as r:
+                    data = await r.json()
+                    temps, descs = [], []
+                    for entry in data['list']:
+                        if iso_date in entry['dt_txt']:
+                            temps.append(entry['main']['temp'])
+                            descs.append(entry['weather'][0].get('description', 'хмарно'))
+                    
+                    if temps:
+                        d, n = round(max(temps)), round(min(temps))
+                        wd = descs[len(descs)//2] if descs else "хмарно"
+                    else:
+                        d, n, wd = 0, 0, "хмарно"
+                    
+                    icon = next((ICONS[k] for k in ICONS if k in wd.lower()), "☁️")
+                    fmt = lambda t: (f"+{t}" if t > 0 else str(t)).rjust(4)
+                    report += f"{icon} <code>{(c['reg']+' ('+c['name']+')').ljust(17)} {fmt(d)}° | {fmt(n)}°</code>\n"
+                    summary += f"{c['name']}: {d}/{n}°C. "
             except Exception as e:
-                logger.error(f"Помилка отримання погоди для {item['name']}: {e}")
-                report += f"❌ <code>{item['name'].ljust(17)} помилка</code>\n"
+                logger.error(f"Помилка {c['name']}: {e}")
+                report += f"❌ <code>{c['name'].ljust(17)} помилка</code>\n"
 
-    # Отримання порад від Gemini (нова бібліотека)
+    # Gemini поради
     try:
-        prompt = f"Ти досвідчений птахівник в Україні. Завтра прогнозуються такі температури: {summary_text}. Дай корисну пораду птахівникам українською мовою на 800 знаків про те, як підготувати курник та доглядати за птицею в таку погоду."
-        response = client.models.generate_content(model="gemini-2.0-flash-exp", contents=prompt)
-        advice = f"\n\n📝 <b>ПОРАДИ ПТАХІВНИКАМ:</b>\n\n{response.text}"
-        logger.info("Поради від Gemini отримано успішно")
+        prompt = f"Ти птахівник в Україні. Завтра: {summary}. Дай пораду на 800 знаків українською про підготовку курника."
+        resp = client.models.generate_content(model="models/gemini-2.5-flash-lite", contents=prompt)
+        advice = f"\n\n📝 <b>ПОРАДИ ПТАХІВНИКАМ:</b>\n\n{resp.text}"
+        logger.info("✅ Поради отримано")
     except Exception as e:
-        logger.error(f"Помилка Gemini API: {e}")
-        advice = f"\n\n⚠️ <b>ШІ в режимі сну</b>\n<i>Помилка: {str(e)[:100]}</i>"
+        logger.error(f"❌ Gemini помилка: {e}")
+        advice = "\n\n⚠️ <b>ШІ в режимі сну</b>"
 
     return report + advice + "\n\n<b>Вдалого господарювання! 🐔</b>"
 
-# Автоматична розсилка о 22:00 за київським часом
 @aiocron.crontab('0 22 * * *', tz=pytz.timezone('Europe/Kiev'))
-async def daily_job():
-    """Щоденна розсилка прогнозу погоди о 22:00 за Києвом"""
-    logger.info("Запуск автоматичної розсилки...")
+async def daily():
+    logger.info("🕐 Запуск розсилки...")
     try:
         text = await get_weather_forecast()
         await bot.send_message(-1001761937362, text, parse_mode=ParseMode.HTML)
-        logger.info("Повідомлення успішно надіслано!")
+        logger.info("✅ Надіслано!")
     except Exception as e:
-        logger.error(f"Помилка при розсилці: {e}")
+        logger.error(f"❌ Помилка розсилки: {e}")
 
-# Ручний запуск (лише для адміністратора)
 @dp.message()
-async def manual(message: types.Message):
-    """Обробка ручного запиту прогнозу"""
-    if message.from_user.id == 708323174:
-        logger.info(f"Ручний запит від адміністратора {message.from_user.id}")
+async def manual(m: types.Message):
+    if m.from_user.id == 708323174:
+        logger.info("👤 Ручний запит")
         try:
             text = await get_weather_forecast()
-            await message.answer(text, parse_mode=ParseMode.HTML)
-            logger.info("Ручний прогноз надіслано")
+            await m.answer(text, parse_mode=ParseMode.HTML)
         except Exception as e:
-            logger.error(f"Помилка відправки: {e}")
-            await message.answer("❌ Помилка при формуванні прогнозу")
+            logger.error(f"❌ Помилка: {e}")
+            await m.answer("❌ Помилка при формуванні прогнозу")
 
 async def main():
-    """Головна функція запуску бота"""
-    logger.info("=" * 50)
-    logger.info("🚀 БОТ ПОГОДИ ДЛЯ ПТАХІВНИКІВ ЗАПУЩЕНО")
-    logger.info("=" * 50)
-    logger.info("⏰ Автоматична розсилка: щодня о 22:00 (Київ)")
-    logger.info("📍 Група: -1001761937362")
-    logger.info("👤 Адмін ID: 708323174")
-    logger.info("=" * 50)
-    
-    # Запускаємо cron-задачу
-    daily_job.start()
-    
-    # Запускаємо polling
+    logger.info("🚀 БОТ ЗАПУЩЕНО")
+    logger.info(f"📍 Група: -1001761937362")
+    logger.info(f"👤 Адмін: 708323174")
+    daily.start()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
 EOF
+
 
 
 
