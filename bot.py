@@ -6,14 +6,13 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
 from dotenv import load_dotenv
-import google.generativeai as genai
+from google import genai  # Нова бібліотека 2026
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pytz import timezone
 
 # 1. Налаштування
 load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel('gemini-1.5-flash')
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 ADMIN_ID = 708323174
 GROUP_ID = -1001761937362
@@ -35,62 +34,61 @@ REGIONS = {
 WEATHER_ICONS = {
     "ясно": "☀️",
     "хмарно": "☁️",
-    "хмарність": "⛅",
+    "переважно хмарно": "🌤",
+    "мінлива хмарність": "⛅",
     "дощ": "🌧",
     "сніг": "❄️",
+    "гроза": "⛈",
     "туман": "🌫",
-    "злива": "🌦"
+    "уривчасті хмари": "☁️"
 }
 
-def get_weather_day_night(city):
-    url = f"http://api.openweathermap.org/data/2.5/forecast?q={city}&appid={os.getenv('WEATHER_API_KEY')}&units=metric&lang=uk"
+def get_weather_day_night(city_name):
+    url = f"http://api.openweathermap.org/data/2.5/forecast?q={city_name}&appid=654e58f000300185e490586e3097c21e&units=metric&lang=uk"
     try:
         r = requests.get(url).json()
-        if r.get("cod") != "200": return "Н/Д"
+        tomorrow = (datetime.now(kyiv_tz) + timedelta(days=1)).date()
         
-        day_temp = "Н/Д"
-        night_temp = "Н/Д"
-        desc = ""
+        day_temps = []
+        night_temps = []
+        desc = "мінлива хмарність"
 
-        # Шукаємо прогноз на завтра
-        tomorrow = (datetime.now(kyiv_tz) + timedelta(days=1)).strftime("%Y-%m-%d")
-        
-        for item in r["list"]:
-            dt_txt = item["dt_txt"]
-            if tomorrow in dt_txt:
-                if "12:00:00" in dt_txt:
-                    day_temp = round(item["main"]["temp"], 1)
-                    desc = item["weather"][0]["description"]
-                if "00:00:00" in dt_txt:
-                    night_temp = round(item["main"]["temp"], 1)
+        for item in r.get('list', []):
+            dt_obj = datetime.fromtimestamp(item['dt'], tz=kyiv_tz)
+            if dt_obj.date() == tomorrow:
+                temp = item['main']['temp']
+                hour = dt_obj.hour
+                if 9 <= hour <= 18:
+                    day_temps.append(temp)
+                    desc = item['weather'][0]['description']
+                else:
+                    night_temps.append(temp)
 
-        icon = "☁️"
-        for key, emoji in WEATHER_ICONS.items():
-            if key in desc.lower():
-                icon = emoji
-                break
+        d_t = f"{max(day_temps):.1f}°" if day_temps else "?°"
+        n_t = f"{min(night_temps):.1f}°" if night_temps else "?°"
+        icon = WEATHER_ICONS.get(desc.lower(), "☁️")
         
-        return f"{icon} День: {day_temp}° | Ніч: {night_temp}°C ({desc})"
+        return f"{icon} День: {d_t} | Ніч: {n_t}C ({desc})"
     except:
-        return "Помилка даних"
+        return "❌ Дані недоступні"
 
 async def get_poultry_advice(summary):
-    tomorrow_date = (datetime.now(kyiv_tz) + timedelta(days=1)).strftime("%d.%m.%Y")
-    # Просимо дуже просто, щоб зекономити ліміти
     prompt = (
-        f"Ти професійний птахівник. На завтра {tomorrow_date} погода: {summary}. "
-        f"Напиши 3 довгих поради про воду, корм та тепло. Пиши детально."
+        f"Ти — провідний технолог компанії з виробництва комбікормів kormikorm.com.ua. "
+        f"На основі цього прогнозу: {summary}, напиши професійну пораду для птахівників (600+ символів). "
+        f"Акцентуй на обмінній енергії корму, температурі води та вентиляції. "
+        f"Стиль: експертний, діловий."
     )
     try:
-        # Використовуємо просту генерацію без наворотів
-        response = model.generate_content(prompt)
-        if response and response.text:
-            return response.text.strip()
-        return "Забезпечте тепло та калорійний корм."
+        # Новий метод виклику Gemini у 2026 році
+        response = client.models.generate_content(
+            model="gemini-2.0-flash", 
+            contents=prompt
+        )
+        return response.text.strip()
     except Exception as e:
-        # Цей рядок виведе помилку прямо тобі в очі в термінал
-        print(f"!!! КРИТИЧНА ПОМИЛКА ШІ: {e}") 
-        return f"Порада: тримайте птицю в теплі. (Технічна помилка: {str(e)})"
+        print(f"!!! КРИТИЧНА ПОМИЛКА ШІ: {e}")
+        return "У зв'язку з погодними умовами рекомендуємо посилити енергетичну цінність раціону та стежити за температурою підстилки."
 
 async def send_daily_report(chat_id):
     tomorrow_str = (datetime.now(kyiv_tz) + timedelta(days=1)).strftime("%d.%m.%Y")
@@ -126,21 +124,16 @@ async def weather_manual(message: types.Message):
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    if message.from_user.id == ADMIN_ID:
-        await message.answer("✅ Бот готовий до роботи. Розсилка о 19:00.")
-
-async def scheduled_broadcast():
-    for cid in RECIPIENTS:
-        await send_daily_report(cid)
-        await asyncio.sleep(1)
+    await message.answer("Бот запущено. Очікуйте розсилку о 19:00 або натисніть /weather (тільки для адміна).")
 
 async def main():
-    scheduler.add_job(scheduled_broadcast, 'cron', hour=19, minute=0)
+    scheduler.add_job(send_daily_report, 'cron', hour=19, minute=0, args=[GROUP_ID])
     scheduler.start()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
