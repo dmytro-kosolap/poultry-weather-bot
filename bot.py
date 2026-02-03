@@ -10,7 +10,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pytz import timezone
 
 # --- НАЛАШТУВАННЯ ---
-TOKEN = "ТВІЙ_НОВИЙ_ТОКЕН" # Встав сюди свій токен від @BotFather
+TOKEN = "8049414176:AAGDwkRxqHU3q9GdZPleq3c4-V2Aep3nipw" # Встав сюди свій токен від @BotFather
 WEATHER_KEY = "d51d1391f46e9ac8d58cf6a1b908ac66"
 GEMINI_KEY = "ТВІЙ_GEMINI_KEY" # Встав ключ Gemini
 ADMIN_ID = 708323174
@@ -113,3 +113,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
