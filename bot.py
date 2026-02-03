@@ -1,3 +1,5 @@
+cd ~/poultry_bot
+cat > bot.py << 'EOF'
 import asyncio
 import aiohttp
 import aiocron
@@ -5,15 +7,14 @@ from datetime import datetime, timedelta
 import pytz
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
+from aiogram.filters import Command
 from google import genai
 import logging
 import os
 from dotenv import load_dotenv
 
-# Завантажуємо змінні з .env
 load_dotenv()
 
-# Налаштування логування
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -24,7 +25,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# === КЛЮЧІ З .env ===
 TOKEN = os.getenv("BOT_TOKEN")
 WEATHER_KEY = os.getenv("WEATHER_API_KEY")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
@@ -35,10 +35,12 @@ if not all([TOKEN, WEATHER_KEY, GEMINI_KEY]):
 
 logger.info("✅ Ключі завантажено")
 
-# Налаштування Gemini (нова бібліотека)
 client = genai.Client(api_key=GEMINI_KEY)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+
+# Тільки цей ID може писати боту
+ADMIN_ID = 708323174
 
 ICONS = {
     "ясно": "☀️", "хмарно": "☁️", "хмарність": "⛅",
@@ -89,11 +91,11 @@ async def get_weather_forecast():
                 logger.error(f"Помилка {c['name']}: {e}")
                 report += f"❌ <code>{c['name'].ljust(17)} помилка</code>\n"
 
-    # Gemini поради
+    # Скорочені поради (~400 знаків)
     try:
-        prompt = f"Ти птахівник в Україні. Завтра: {summary}. Дай пораду на 800 знаків українською про підготовку курника."
+        prompt = f"Ти птахівник в Україні. Завтра: {summary}. Дай коротку пораду на 400 знаків українською про догляд за птицею в таку погоду."
         resp = client.models.generate_content(model="models/gemini-2.5-flash-lite", contents=prompt)
-        advice = f"\n\n📝 <b>ПОРАДИ ПТАХІВНИКАМ:</b>\n\n{resp.text}"
+        advice = f"\n\n📝 <b>ПОРАДА:</b>\n\n{resp.text}"
         logger.info("✅ Поради отримано")
     except Exception as e:
         logger.error(f"❌ Gemini помилка: {e}")
@@ -101,33 +103,42 @@ async def get_weather_forecast():
 
     return report + advice + "\n\n<b>Вдалого господарювання! 🐔</b>"
 
-@aiocron.crontab('0 22 * * *', tz=pytz.timezone('Europe/Kiev'))
+# РОЗСИЛКА О 19:00 (змінено з 22:00)
+@aiocron.crontab('0 19 * * *', tz=pytz.timezone('Europe/Kiev'))
 async def daily():
-    logger.info("🕐 Запуск розсилки...")
+    logger.info("🕐 Запуск розсилки о 19:00...")
     try:
         text = await get_weather_forecast()
         await bot.send_message(-1001761937362, text, parse_mode=ParseMode.HTML)
-        logger.info("✅ Надіслано!")
+        logger.info("✅ Надіслано в групу!")
     except Exception as e:
         logger.error(f"❌ Помилка розсилки: {e}")
 
+# ТІЛЬКИ ДЛЯ АДМІНА (ID 708323174)
 @dp.message()
 async def manual(m: types.Message):
-    if m.from_user.id == 708323174:
-        logger.info("👤 Ручний запит")
-        try:
-            text = await get_weather_forecast()
-            await m.answer(text, parse_mode=ParseMode.HTML)
-        except Exception as e:
-            logger.error(f"❌ Помилка: {e}")
-            await m.answer("❌ Помилка при формуванні прогнозу")
+    # Перевірка ID
+    if m.from_user.id != ADMIN_ID:
+        logger.warning(f"❌ Спроба доступу від {m.from_user.id}")
+        return  # Ігноруємо чужі повідомлення
+    
+    logger.info(f"👤 Ручний запит від адміна {m.from_user.id}")
+    try:
+        text = await get_weather_forecast()
+        await m.answer(text, parse_mode=ParseMode.HTML)
+        logger.info("✅ Ручний прогноз надіслано")
+    except Exception as e:
+        logger.error(f"❌ Помилка: {e}")
+        await m.answer("❌ Помилка при формуванні прогнозу")
 
 async def main():
     logger.info("🚀 БОТ ЗАПУЩЕНО")
     logger.info(f"📍 Група: -1001761937362")
-    logger.info(f"👤 Адмін: 708323174")
+    logger.info(f"👤 Адмін ID: {ADMIN_ID}")
+    logger.info("⏰ Авторозсилка: 19:00 (Київ)")
     daily.start()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+EOF
