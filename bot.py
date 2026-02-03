@@ -40,7 +40,7 @@ async def get_weather_forecast():
     date_rev = tomorrow_dt.strftime("%d-%m-%Y")
     tomorrow_iso = tomorrow_dt.strftime("%Y-%m-%d")
     
-    report = f"📅 <b>ПРОГНОЗ НА ЗАВТРА ({date_rev})</b>\n\n"
+    report = f"📅 <b>ПОГОДА НА ЗАВТРА ({date_rev})</b>\n\n"
     # Заголовок таблиці
     report += "<code>Регіон (Місто)      День | Ніч</code>\n"
     
@@ -115,6 +115,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
