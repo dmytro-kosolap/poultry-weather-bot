@@ -21,11 +21,11 @@ ICONS = {"ясно": "☀️", "хмарно": "☁️", "хмарність": "
 async def get_weather_forecast():
     # Список міст із прив'язкою до регіонів
     cities_config = [
-        {"region": "📍 Центр", "name": "Київ", "eng": "Kyiv"},
-        {"region": "📍 Південь", "name": "Одеса", "eng": "Odesa"},
-        {"region": "📍 Захід", "name": "Львів", "eng": "Lviv"},
-        {"region": "📍 Схід", "name": "Харків", "eng": "Kharkiv"},
-        {"region": "📍 Північ", "name": "Чернігів", "eng": "Chernihiv"}
+        {"region": " Центр", "name": "Київ", "eng": "Kyiv"},
+        {"region": " Південь", "name": "Одеса", "eng": "Odesa"},
+        {"region": " Захід", "name": "Львів", "eng": "Lviv"},
+        {"region": " Схід", "name": "Харків", "eng": "Kharkiv"},
+        {"region": " Північ", "name": "Чернігів", "eng": "Chernihiv"}
     ]
     
     tomorrow_dt = datetime.now() + timedelta(days=1)
@@ -92,6 +92,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
