@@ -26,10 +26,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# === КЛЮЧІ З .env ===
+# === КЛЮЧІ З .env (правильні назви) ===
 TOKEN = os.getenv("BOT_TOKEN")
-WEATHER_KEY = os.getenv("WEATHER_KEY")
-GEMINI_KEY = os.getenv("GEMINI_KEY")
+WEATHER_KEY = os.getenv("WEATHER_API_KEY")  # ЗМІНЕНО
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")    # ЗМІНЕНО
 
 if not all([TOKEN, WEATHER_KEY, GEMINI_KEY]):
     logger.error("❌ Не знайдено всі ключі в .env!")
@@ -134,6 +134,7 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 EOF
+
 
 
 
