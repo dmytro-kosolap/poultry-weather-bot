@@ -76,36 +76,23 @@ def get_weather_day_night(city):
 
 async def get_poultry_advice(summary):
     tomorrow_date = (datetime.now(kyiv_tz) + timedelta(days=1)).strftime("%d.%m.%Y")
-    # Міняємо модель на Pro для кращого інтелекту
-    model_pro = genai.GenerativeModel('gemini-1.5-pro') 
-    
     prompt = (
-        f"Ти — головний помічник птахівника. На завтра {tomorrow_date} маємо такий прогноз: {summary}.\n\n"
-        f"ТВОЄ ЗАВДАННЯ: Напиши ДЕТАЛЬНИЙ інструктаж для фермерів. Текст має бути ВЕЛИКИМ (3-4 абзаци, мінімум 800 символів).\n\n"
-        f"СТРУКТУРА ВІДПОВІДІ:\n"
-        f"1. Привітання та аналіз температури (особливо критичних нічних заморозків).\n"
-        f"2. Конкретні поради по годівлі: які добавки внести, як збільшити енергію корму.\n"
-        f"3. Технічні поради: вентиляція, підстилка, підігрів води, світловий режим.\n"
-        f"4. Заключне слово.\n\n"
-        f"ВАЖЛИВО: Не використовуй загальні фрази. Пиши професійно, вказуй цифри (грами, градуси, сантиметри)."
+        f"Ти професійний технолог-птахівник. На завтра {tomorrow_date} такий прогноз погоди: {summary}. "
+        f"Напиши розгорнуту пораду птахівникам на 4-5 речень. "
+        f"Обов'язково згадай: як підготувати напувалки до морозів, чому треба додати кукурудзу в корм "
+        f"та яка товщина підстилки врятує птицю вночі. Будь конкретним, пиши цифри."
     )
-    
     try:
-        response = await model_pro.generate_content_async(
+        # Додаємо конфігурацію, щоб він не жадничав на слова
+        response = model.generate_content(
             prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.8,
-                max_output_tokens=1000
-            )
+            generation_config={"max_output_tokens": 800, "temperature": 0.8}
         )
-        text = response.text.strip()
-        # Якщо ШІ все одно прислав замало - додаємо "заглушку"
-        if len(text) < 100:
-            return "⚠️ Помилка генерації. Будь ласка, забезпечте птахам тепло, калорійний корм (кукурудза +5%) та перевірте, щоб вода не замерзла при нічних -20°C."
-        return text
+        return response.text.strip()
     except Exception as e:
         print(f"Помилка Gemini: {e}")
-        return "Слідкуйте за температурним режимом та вентиляцією."
+        # Якщо все одно помилка, давай виведемо її частину в бот, щоб ми бачили, що не так
+        return f"Порада: тримайте птицю в теплі. (Технічна помилка: {str(e)[:50]})"
 
 async def send_daily_report(chat_id):
     tomorrow_str = (datetime.now(kyiv_tz) + timedelta(days=1)).strftime("%d.%m.%Y")
@@ -156,6 +143,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
