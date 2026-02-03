@@ -6,6 +6,18 @@ import pytz
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 import google.generativeai as genai
+import logging
+
+# Налаштування логування у файл
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('bot.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # === ТВОЇ ДАНІ ===
 TOKEN = "8049414176:AAGDwkRxqHU3q9GdZPleq3c4-V2Aep3nipw"
@@ -87,18 +99,19 @@ async def get_weather_forecast():
                         report += f"{icon} <code>{city_part} {fmt(d_t)}° | {fmt(n_t)}°</code>\n"
                         summary_text += f"{item['name']}: {d_t}/{n_t}C. "
             except Exception as e:
-                print(f"Помилка отримання погоди для {item['name']}: {e}")
+                logger.error(f"Помилка отримання погоди для {item['name']}: {e}")
                 report += f"❌ <code>{item['name'].ljust(17)} помилка</code>\n"
 
     # Отримання порад від Gemini
     try:
         prompt = f"Ти досвідчений птахівник в Україні. Завтра прогнозуються такі температури: {summary_text}. Дай корисну пораду птахівникам українською мовою на 800 знаків про те, як підготувати курник та доглядати за птицею в таку погоду."
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-pro')  # ЗМІНЕНО: з gemini-1.5-flash на gemini-pro
         response = model.generate_content(prompt)
         advice = f"\n\n📝 <b>ПОРАДИ ПТАХІВНИКАМ:</b>\n\n{response.text}"
+        logger.info("Поради від Gemini отримано успішно")
     except Exception as e:
-        print(f"Помилка Gemini API: {e}")
-        advice = "\n\n⚠️ ШІ в режимі сну"
+        logger.error(f"Помилка Gemini API: {e}")
+        advice = f"\n\n⚠️ <b>ШІ в режимі сну</b>\n<i>Помилка: {str(e)[:100]}</i>"
 
     return report + advice + "\n\n<b>Вдалого господарювання! 🐔</b>"
 
@@ -106,36 +119,37 @@ async def get_weather_forecast():
 @aiocron.crontab('0 22 * * *', tz=pytz.timezone('Europe/Kiev'))
 async def daily_job():
     """Щоденна розсилка прогнозу погоди о 22:00 за Києвом"""
-    print(f"[{datetime.now()}] Запуск автоматичної розсилки...")
+    logger.info("Запуск автоматичної розсилки...")
     try:
         text = await get_weather_forecast()
         await bot.send_message(-1001761937362, text, parse_mode=ParseMode.HTML)
-        print(f"[{datetime.now()}] Повідомлення успішно надіслано!")
+        logger.info("Повідомлення успішно надіслано!")
     except Exception as e:
-        print(f"[{datetime.now()}] Помилка при розсилці: {e}")
+        logger.error(f"Помилка при розсилці: {e}")
 
 # Ручний запуск (лише для адміністратора)
 @dp.message()
 async def manual(message: types.Message):
     """Обробка ручного запиту прогнозу"""
     if message.from_user.id == 708323174:
-        print(f"[{datetime.now()}] Ручний запит від адміністратора")
+        logger.info(f"Ручний запит від адміністратора {message.from_user.id}")
         try:
             text = await get_weather_forecast()
             await message.answer(text, parse_mode=ParseMode.HTML)
+            logger.info("Ручний прогноз надіслано")
         except Exception as e:
-            print(f"Помилка відправки: {e}")
+            logger.error(f"Помилка відправки: {e}")
             await message.answer("❌ Помилка при формуванні прогнозу")
 
 async def main():
     """Головна функція запуску бота"""
-    print("=" * 50)
-    print("🚀 БОТ ПОГОДИ ДЛЯ ПТАХІВНИКІВ ЗАПУЩЕНО")
-    print("=" * 50)
-    print(f"⏰ Автоматична розсилка: щодня о 22:00 (Київ)")
-    print(f"📍 Група: -1001761937362")
-    print(f"👤 Адмін ID: 708323174")
-    print("=" * 50)
+    logger.info("=" * 50)
+    logger.info("🚀 БОТ ПОГОДИ ДЛЯ ПТАХІВНИКІВ ЗАПУЩЕНО")
+    logger.info("=" * 50)
+    logger.info("⏰ Автоматична розсилка: щодня о 22:00 (Київ)")
+    logger.info("📍 Група: -1001761937362")
+    logger.info("👤 Адмін ID: 708323174")
+    logger.info("=" * 50)
     
     # Запускаємо cron-задачу
     daily_job.start()
@@ -145,6 +159,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
