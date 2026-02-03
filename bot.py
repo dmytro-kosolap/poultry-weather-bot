@@ -13,7 +13,7 @@ from pytz import timezone
 # 1. Налаштування
 load_dotenv()
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel('gemini-1.5-pro')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 ADMIN_ID = 708323174
 GROUP_ID = -1001761937362
@@ -156,5 +156,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
