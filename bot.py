@@ -45,12 +45,6 @@ ICONS = {
     "злива": "🌦", "гроза": "⛈"
 }
 
-def truncate_text(text, max_len=250):
-    """Обрізає текст до max_len символів"""
-    if len(text) <= max_len:
-        return text
-    return text[:max_len].rsplit(' ', 1)[0] + "..."
-
 async def get_weather_forecast():
     cities = [
         {"reg": "Центр", "name": "Київ", "eng": "Kyiv"},
@@ -94,50 +88,47 @@ async def get_weather_forecast():
                 logger.error(f"Помилка {c['name']}: {e}")
                 report += f"❌ <code>{c['name'].ljust(17)} помилка</code>\n"
 
-    # КОРОТКІ ПОРАДИ (макс 250 символів)
+    # ПОРАДИ ВІД GEMINI (новий промпт)
     try:
-        prompt = f"Ти птахівник. Завтра: {summary}. Напиши 1-2 речення українською поради. Коротко, по суті."
+        prompt = f"Ти досвідчений український птахівник. Погода на завтра: {summary}. Дай одну коротку практичну пораду (1-2 речення) без жодного форматування, без зірочок та списків. Максимум 180 символів."
         resp = client.models.generate_content(model="models/gemini-2.5-flash-lite", contents=prompt)
-        # Жорстке обрізання
-        short_text = truncate_text(resp.text, 250)
-        advice = f"\n\n📝 <b>ПОРАДА:</b> {short_text}"
-        logger.info(f"✅ Поради отримано ({len(short_text)} символів)")
+        # Обрізаємо якщо треба
+        text = resp.text[:200] + "..." if len(resp.text) > 200 else resp.text
+        advice = f"\n\n📝 <b>ПОРАДА:</b> {text}"
+        logger.info(f"✅ Поради: {len(text)} символів")
     except Exception as e:
-        logger.error(f"❌ Gemini помилка: {e}")
+        logger.error(f"❌ Gemini: {e}")
         advice = "\n\n⚠️ <b>ШІ в режимі сну</b>"
 
     return report + advice + "\n\n<b>Вдалого господарювання! 🐔</b>"
 
 @aiocron.crontab('0 19 * * *', tz=pytz.timezone('Europe/Kiev'))
 async def daily():
-    logger.info("🕐 Запуск розсилки о 19:00...")
+    logger.info("🕐 Розсилка о 19:00...")
     try:
         text = await get_weather_forecast()
         await bot.send_message(-1001761937362, text, parse_mode=ParseMode.HTML)
-        logger.info("✅ Надіслано в групу!")
+        logger.info("✅ Надіслано!")
     except Exception as e:
-        logger.error(f"❌ Помилка розсилки: {e}")
+        logger.error(f"❌ Помилка: {e}")
 
 @dp.message()
 async def manual(m: types.Message):
     if m.from_user.id != ADMIN_ID:
-        logger.warning(f"❌ Спроба доступу від {m.from_user.id}")
+        logger.warning(f"❌ Спроба від {m.from_user.id}")
         return
     
-    logger.info(f"👤 Ручний запит від адміна {m.from_user.id}")
+    logger.info(f"👤 Адмін {m.from_user.id}")
     try:
         text = await get_weather_forecast()
         await m.answer(text, parse_mode=ParseMode.HTML)
-        logger.info("✅ Ручний прогноз надіслано")
     except Exception as e:
         logger.error(f"❌ Помилка: {e}")
-        await m.answer("❌ Помилка при формуванні прогнозу")
+        await m.answer("❌ Помилка")
 
 async def main():
     logger.info("🚀 БОТ ЗАПУЩЕНО")
-    logger.info(f"📍 Група: -1001761937362")
-    logger.info(f"👤 Адмін ID: {ADMIN_ID}")
-    logger.info("⏰ Авторозсилка: 19:00 (Київ)")
+    logger.info(f"⏰ 19:00 | 👤 {ADMIN_ID}")
     daily.start()
     await dp.start_polling(bot)
 
