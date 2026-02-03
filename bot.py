@@ -1,9 +1,10 @@
+cat << 'EOF' > bot.py
 import asyncio
 import aiohttp
 from aiogram import Bot, Dispatcher, types
 
-# ЧИСТІ ДАНІ
-TOKEN = "8049414176:AAGXfxG611y9L2p4wNX1VrhZQlXxH_YGiog"
+# === НАЛАШТУВАННЯ ===
+TOKEN = "8049414176:AAGDwkRxqHU3q9GdZPleq3c4-V2Aep3nipw"
 WEATHER_KEY = "d51d1391f46e9ac8d58cf6a1b908ac66"
 ADMIN_ID = 708323174
 
@@ -13,7 +14,6 @@ dp = Dispatcher()
 async def get_weather():
     cities = {"Київ": "Kyiv", "Одеса": "Odesa", "Львів": "Lviv", "Харків": "Kharkiv", "Чернігів": "Chernihiv"}
     report = "📊 ПОКАЗНИКИ ТЕМПЕРАТУРИ:\n\n"
-    
     async with aiohttp.ClientSession() as session:
         for name, eng in cities.items():
             url = f"http://api.openweathermap.org/data/2.5/weather?q={eng}&appid={WEATHER_KEY}&units=metric&lang=uk"
@@ -24,20 +24,21 @@ async def get_weather():
                         temp = round(data['main']['temp'])
                         report += f"✅ {name}: {temp}°C\n"
                     else:
-                        report += f"❌ {name}: помилка {resp.status}\n"
+                        report += f"❌ {name}: помилка\n"
             except:
-                report += f"❌ {name}: сервер офлайн\n"
+                report += f"❌ {name}: офлайн\n"
     return report
 
 @dp.message()
-async def send_report(message: types.Message):
+async def handle(message: types.Message):
     if message.from_user.id == ADMIN_ID:
-        data = await get_weather()
-        await message.answer(data)
+        res = await get_weather()
+        await message.answer(res)
 
 async def main():
-    print("Бот запущений. Напиши йому БУДЬ-ЯКЕ слово в Телеграм.")
+    print("🔥 БОТ ЖИВИЙ! ПИШИ ЙОМУ В ТЕЛЕГРАМ!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+EOF
