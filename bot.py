@@ -15,26 +15,24 @@ client = genai.Client(api_key=GEMINI_KEY.strip())
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Іконки для наочності
 ICONS = {"ясно": "☀️", "хмарно": "☁️", "хмарність": "⛅", "дощ": "🌧", "сніг": "❄️", "туман": "🌫", "злива": "🌦"}
 
 async def get_weather_forecast():
-    # Список міст із прив'язкою до регіонів
     cities_config = [
-        {"region": " Центр", "name": "Київ", "eng": "Kyiv"},
-        {"region": " Південь", "name": "Одеса", "eng": "Odesa"},
-        {"region": " Захід", "name": "Львів", "eng": "Lviv"},
-        {"region": " Схід", "name": "Харків", "eng": "Kharkiv"},
-        {"region": " Північ", "name": "Чернігів", "eng": "Chernihiv"}
+        {"reg": "Центр ", "name": "Київ", "eng": "Kyiv"},
+        {"reg": "Південь", "name": "Одеса", "eng": "Odesa"},
+        {"reg": "Захід ", "name": "Львів", "eng": "Lviv"},
+        {"reg": "Схід  ", "name": "Харків", "eng": "Kharkiv"},
+        {"reg": "Північ", "name": "Чернігів", "eng": "Chernihiv"}
     ]
     
     tomorrow_dt = datetime.now() + timedelta(days=1)
-    # Дата у зворотному порядку: ДД-ММ-РРРР
-    date_rev = tomorrow_dt.strftime("%d-%0m-%Y")
+    date_rev = tomorrow_dt.strftime("%d-%m-%Y")
     tomorrow_iso = tomorrow_dt.strftime("%Y-%m-%d")
     
     report = f"📅 <b>ПРОГНОЗ НА ЗАВТРА ({date_rev})</b>\n\n"
-    summary_for_ai = ""
+    report += "<code>Регіон (Місто)      День | Ніч</code>\n"
+    summary_text = ""
 
     async with aiohttp.ClientSession() as session:
         for item in cities_config:
@@ -43,28 +41,29 @@ async def get_weather_forecast():
                 async with session.get(url, timeout=10) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        d_t, n_t, desc = "Н/Д", "Н/Д", "хмарно"
+                        d_t, n_t, desc = "??", "??", "хмарно"
                         for entry in data['list']:
                             if tomorrow_iso in entry['dt_txt']:
                                 if "12:00:00" in entry['dt_txt']:
                                     d_t = round(entry['main']['temp'])
                                     desc = entry['weather'][0].get('description', 'хмарно')
-                                if "00:00:00" in entry['dt_txt']:
+                                if "00:00:00" in entry['dt_txt'] or "03:00:00" in entry['dt_txt']:
                                     n_t = round(entry['main']['temp'])
                         
                         icon = "☁️"
                         for k, v in ICONS.items():
                             if k in desc.lower(): icon = v; break
                         
-                        # Форматування в один рядок: Регіон (Місто) Температура
-                        report += f"{icon} {item['region']} ({item['name']}): {d_t}° | {n_t}°\n"
-                        summary_for_ai += f"{item['name']}: {d_t}/{n_t}C. "
+                        # Вирівнювання за допомогою f-строк: назва до 18 символів
+                        city_label = f"{item['reg']} ({item['name']})"
+                        temp_line = f"{str(d_t).rjust(3)}° | {str(n_t).rjust(3)}°"
+                        report += f"{icon} <code>{city_label.ljust(18)} {temp_line}</code>\n"
+                        summary_text += f"{item['name']}: {d_t}/{n_t}C. "
             except:
-                report += f"❌ {item['region']} ({item['name']}): помилка\n"
+                report += f"❌ {item['name']}: помилка\n"
 
-    # --- БЛОК ШІ ---
     try:
-        prompt = f"Ти птахівник. Завтра морози: {summary_for_ai}. Напиши розгорнуту пораду українською на 800 символів."
+        prompt = f"Ти птахівник. Завтра морози: {summary_text}. Дай розгорнуту пораду українською на 800 символів."
         response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
         advice = f"\n📝 <b>ПОРАДИ ПТАХІВНИКАМ:</b>\n\n{response.text}"
     except:
@@ -87,11 +86,12 @@ async def manual(message: types.Message):
             await message.answer(text)
 
 async def main():
-    print("🚀 БОТ ЗАПУЩЕНИЙ (НОВИЙ ФОРМАТ)")
+    print("🚀 БОТ ЗАПУЩЕНИЙ (РІВНІ СТОВПЧИКИ)")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
