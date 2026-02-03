@@ -9,7 +9,7 @@ from google import genai  # Новий імпорт
 # === ТВОЇ ДАНІ ===
 TOKEN = "8049414176:AAGDwkRxqHU3q9GdZPleq3c4-V2Aep3nipw"
 WEATHER_KEY = "d51d1391f46e9ac8d58cf6a1b908ac66"
-GEMINI_KEY = "AIzaSyAVUWNX8E6nVeu3i7mOM7Qk9IKekFduxkk" 
+GEMINI_KEY = "AIzaSyBohuxWudkXZ7OfgIIGbci8aFbriaa9wR4" 
 
 client = genai.Client(api_key=GEMINI_KEY.strip())
 bot = Bot(token=TOKEN)
@@ -46,18 +46,18 @@ async def get_weather_forecast():
                         summary_text += f"{name}: день {d_t}, ніч {n_t}, {desc}. "
             except: report += f"❌ {name}: помилка\n"
 
-    # --- НОВИЙ БЛОК GEMINI (SDK v1) ---
+    # --- БЛОК ДІАГНОСТИКИ GEMINI ---
     try:
-        prompt = (
-            f"Ти провідний технолог-птахівник. Прогноз на завтра: {summary_text}. "
-            "Напиши розгорнуту професійну пораду на 800-1000 символів українською мовою. "
-            "Акцентуй на калорійності корму при морозах -20, вентиляції та замерзанні води."
-        )
-        # Новий спосіб виклику
+        prompt = f"Прогноз: {summary_text}. Дай коротку пораду птахівнику на 800 символів."
         response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
-        advice = f"\n📝 **ПОРАДИ ПТАХІВНИКАМ:**\n\n{response.text}"
+        
+        if response.text:
+            advice = f"\n📝 **ПОРАДИ ПТАХІВНИКАМ:**\n\n{response.text}"
+        else:
+            advice = "\n\n⚠️ ШІ повернув порожню відповідь. Перевірте статус ключа."
     except Exception as e:
-        advice = f"\n\n⚠️ Порада від ШІ тимчасово недоступна. Перевірте обігрів при морозах!"
+        # Цей рядок виведе реальну причину в чат бота
+        advice = f"\n\n❌ ПОМИЛКА ШІ: {str(e)[:100]}"
 
     return report + advice
 
@@ -79,6 +79,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
