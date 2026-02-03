@@ -4,12 +4,12 @@ import aiocron
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
-from google import genai  # Новий імпорт
+from google import genai
 
 # === ТВОЇ ДАНІ ===
 TOKEN = "8049414176:AAGDwkRxqHU3q9GdZPleq3c4-V2Aep3nipw"
 WEATHER_KEY = "d51d1391f46e9ac8d58cf6a1b908ac66"
-GEMINI_KEY = "AIzaSyBohuxWudkXZ7OfgIIGbci8aFbriaa9wR4" 
+GEMINI_KEY = "ВСТАВ_СЮДИ_КЛЮЧ" 
 
 client = genai.Client(api_key=GEMINI_KEY.strip())
 bot = Bot(token=TOKEN)
@@ -43,21 +43,19 @@ async def get_weather_forecast():
                         for k, v in ICONS.items():
                             if k in desc.lower(): icon = v; break
                         report += f"{icon} **{name}**: День {d_t}° | Ніч {n_t}°\n"
-                        summary_text += f"{name}: день {d_t}, ніч {n_t}, {desc}. "
+                        summary_text += f"{name}: {d_t} вдень, {n_t} вночі. "
             except: report += f"❌ {name}: помилка\n"
 
-    # --- БЛОК ДІАГНОСТИКИ GEMINI ---
+    # --- СПРОЩЕНИЙ БЛОК GEMINI ---
     try:
-        prompt = f"Прогноз: {summary_text}. Дай коротку пораду птахівнику на 800 символів."
-        response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
-        
-        if response.text:
-            advice = f"\n📝 **ПОРАДИ ПТАХІВНИКАМ:**\n\n{response.text}"
-        else:
-            advice = "\n\n⚠️ ШІ повернув порожню відповідь. Перевірте статус ключа."
+        # Використовуємо спрощений виклик без зайвих параметрів
+        response = client.models.generate_content(
+            model="gemini-1.5-flash", 
+            contents=f"Ти експерт-птахівник. Дай розгорнуту пораду на 1000 символів для птахівників, враховуючи мороз: {summary_text}"
+        )
+        advice = f"\n📝 **ПОРАДИ ПТАХІВНИКАМ:**\n\n{response.text}"
     except Exception as e:
-        # Цей рядок виведе реальну причину в чат бота
-        advice = f"\n\n❌ ПОМИЛКА ШІ: {str(e)[:100]}"
+        advice = f"\n\n❌ Помилка Gemini: {str(e)[:50]}"
 
     return report + advice
 
@@ -69,16 +67,19 @@ async def daily_job():
 @dp.message()
 async def manual(message: types.Message):
     if message.from_user.id == 708323174:
-        wait_msg = await message.answer("🔍 Отримую прогноз та генерую поради через новий протокол...")
+        # Відправляємо проміжне повідомлення
+        status_msg = await message.answer("🔍 Аналізую морози та готую поради...")
         text = await get_weather_forecast()
-        await wait_msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
+        # Редагуємо його, додаючи фінальний текст
+        await status_msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
 
 async def main():
-    print("🚀 БОТ ЗАПУЩЕНИЙ НА НОВОМУ ЯДРІ!")
+    print("🚀 ЕТАЛОН v2 АКТИВОВАНО")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
