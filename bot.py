@@ -4,14 +4,16 @@ import aiocron
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
-from google import genai
+from openai import OpenAI
 
 # === ТВОЇ ДАНІ ===
 TOKEN = "8049414176:AAGDwkRxqHU3q9GdZPleq3c4-V2Aep3nipw"
 WEATHER_KEY = "d51d1391f46e9ac8d58cf6a1b908ac66"
-GEMINI_KEY = "AIzaSyCI6btpcCFZIrrsq9CzaVMwnb3ckpztpk0" # Твій ключ Gemini
+DEEPSEEK_KEY = "sk-922836d3a6b94ab9a43ce0b9934b5d4d"
 
-client = genai.Client(api_key=GEMINI_KEY.strip())
+# Налаштування під DeepSeek (використовує стандарт OpenAI)
+client = OpenAI(api_key=DEEPSEEK_KEY.strip(), base_url="https://api.deepseek.com")
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
@@ -43,20 +45,22 @@ async def get_weather_forecast():
                         for k, v in ICONS.items():
                             if k in desc.lower(): icon = v; break
                         report += f"{icon} **{name}**: День {d_t}° | Ніч {n_t}°\n"
-                        summary_text += f"{name}: {d_t} in day, {n_t} at night. " # Використовуємо латиницю для ШІ, щоб уникнути помилок кодування
+                        summary_text += f"{name}: вдень {d_t}, вночі {n_t}, {desc}. "
             except: report += f"❌ {name}: помилка\n"
 
-    # --- ВИПРАВЛЕНИЙ БЛОК GEMINI ---
+    # --- БЛОК DEEPSEEK ---
     try:
-        # Формуємо запит так, щоб уникнути проблем з кодуванням
-        prompt = f"Poultry expert advice for weather: {summary_text}. Write in UKRAINIAN 1000 symbols."
-        response = client.models.generate_content(
-            model="gemini-1.5-flash", 
-            contents=prompt
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "Ти професійний український технолог-птахівник. Давай розгорнуті поради (1000 символів) щодо годівлі, вентиляції та води."},
+                {"role": "user", "content": f"Склади поради на основі погоди: {summary_text}. Особлива увага морозам."}
+            ],
+            stream=False
         )
-        advice = f"\n📝 **ПОРАДИ ПТАХІВНИКАМ:**\n\n{response.text}"
+        advice = f"\n📝 **ПОРАДИ ПТАХІВНИКАМ:**\n\n{response.choices[0].message.content}"
     except Exception as e:
-        advice = f"\n\n❌ Помилка Gemini: Перевірте ключ або з'єднання."
+        advice = f"\n\n❌ Помилка DeepSeek: {str(e)[:50]}"
 
     return report + advice
 
@@ -68,16 +72,17 @@ async def daily_job():
 @dp.message()
 async def manual(message: types.Message):
     if message.from_user.id == 708323174:
-        status_msg = await message.answer("🔍 Аналізую морози та готую поради...")
+        status_msg = await message.answer("🔍 DeepSeek аналізує погоду та готує поради...")
         text = await get_weather_forecast()
         await status_msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
 
 async def main():
-    print("🚀 ЕТАЛОН v3 (UTF-8 FIX) ЗАПУЩЕНО")
+    print("🚀 БОТ НА DEEPSEEK ЗАПУЩЕНО")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
