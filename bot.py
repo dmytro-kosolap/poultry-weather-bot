@@ -1,48 +1,42 @@
-import os, asyncio, requests
+import asyncio
+import aiohttp
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
-from google import genai
-from dotenv import load_dotenv
 
-load_dotenv()
-bot = Bot(token=os.getenv("BOT_TOKEN"))
-dp = Dispatcher()
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
+# ЧИСТІ ДАНІ
+TOKEN = "8049414176:AAGXfxG611y9L2p4wNX1VrhZQlXxH_YGiog"
+WEATHER_KEY = "d51d1391f46e9ac8d58cf6a1b908ac66"
 ADMIN_ID = 708323174
-WEATHER_KEY = "654e58f000300185e490586e3097c21e"
 
-def get_real_weather():
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
+
+async def get_weather():
     cities = {"Київ": "Kyiv", "Одеса": "Odesa", "Львів": "Lviv", "Харків": "Kharkiv", "Чернігів": "Chernihiv"}
-    res_text = ""
-    for name, eng in cities.items():
-        try:
-            r = requests.get(f"http://api.openweathermap.org/data/2.5/weather?q={eng}&appid={WEATHER_KEY}&units=metric&lang=uk").json()
-            temp = round(r['main']['temp'])
-            res_text += f"📍 {name}: {temp}°C\n"
-        except:
-            res_text += f"📍 {name}: помилка даних\n"
-    return res_text
+    report = "📊 ПОКАЗНИКИ ТЕМПЕРАТУРИ:\n\n"
+    
+    async with aiohttp.ClientSession() as session:
+        for name, eng in cities.items():
+            url = f"http://api.openweathermap.org/data/2.5/weather?q={eng}&appid={WEATHER_KEY}&units=metric&lang=uk"
+            try:
+                async with session.get(url, timeout=10) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        temp = round(data['main']['temp'])
+                        report += f"✅ {name}: {temp}°C\n"
+                    else:
+                        report += f"❌ {name}: помилка {resp.status}\n"
+            except:
+                report += f"❌ {name}: сервер офлайн\n"
+    return report
 
-@dp.message(Command("weather"))
-async def send_weather(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
-    
-    # Спочатку виводимо цифри (це працює завжди!)
-    weather_data = get_real_weather()
-    final_text = f"📅 Метеозведення на сьогодні:\n\n{weather_data}"
-    
-    # Спробуємо додати ШІ, якщо вийде
-    try:
-        response = client.models.generate_content(model="gemini-2.0-flash", contents="Дай одну пораду птахівнику на сьогодні")
-        final_text += f"\n💡 Порада: {response.text}"
-    except:
-        final_text += "\n💡 Порада: Стежте за температурою в пташнику (ШІ відпочиває)."
-    
-    await message.answer(final_text + "\n\n🔗 kormikorm.com.ua")
+@dp.message()
+async def send_report(message: types.Message):
+    if message.from_user.id == ADMIN_ID:
+        data = await get_weather()
+        await message.answer(data)
 
 async def main():
-    print("Бот запущений. Цифри тепер незалежні від ШІ!")
+    print("Бот запущений. Напиши йому БУДЬ-ЯКЕ слово в Телеграм.")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
