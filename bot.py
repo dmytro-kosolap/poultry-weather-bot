@@ -6,7 +6,7 @@ from aiogram.filters import Command
 import google.generativeai as genai
 
 # --- ТВОЇ ДАНІ ---
-TOKEN = "ТВІЙ_ТОКЕН"
+TOKEN = "8049414176:AAGDwkRxqHU3q9GdZPleq3c4-V2Aep3nipw"
 WEATHER_KEY = "d51d1391f46e9ac8d58cf6a1b908ac66"
 GEMINI_KEY = "ТВІЙ_GEMINI_KEY"
 ADMIN_ID = 708323174
@@ -68,4 +68,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
