@@ -18,6 +18,7 @@ dp = Dispatcher()
 ICONS = {"ясно": "☀️", "хмарно": "☁️", "хмарність": "⛅", "дощ": "🌧", "сніг": "❄️", "туман": "🌫", "злива": "🌦"}
 
 async def get_weather_forecast():
+    # Додаємо пробіли в назви регіонів для однакової довжини
     cities_config = [
         {"reg": "Центр ", "name": "Київ", "eng": "Kyiv"},
         {"reg": "Південь", "name": "Одеса", "eng": "Odesa"},
@@ -31,6 +32,7 @@ async def get_weather_forecast():
     tomorrow_iso = tomorrow_dt.strftime("%Y-%m-%d")
     
     report = f"📅 <b>ПРОГНОЗ НА ЗАВТРА ({date_rev})</b>\n\n"
+    # Заголовок у моноширинному форматі
     report += "<code>Регіон (Місто)      День | Ніч</code>\n"
     summary_text = ""
 
@@ -54,10 +56,13 @@ async def get_weather_forecast():
                         for k, v in ICONS.items():
                             if k in desc.lower(): icon = v; break
                         
-                        # Вирівнювання за допомогою f-строк: назва до 18 символів
+                        # Форматування: назва (16 символів) + температури (по 3 символи на кожну)
                         city_label = f"{item['reg']} ({item['name']})"
-                        temp_line = f"{str(d_t).rjust(3)}° | {str(n_t).rjust(3)}°"
-                        report += f"{icon} <code>{city_label.ljust(18)} {temp_line}</code>\n"
+                        # rjust(3) гарантує, що "-5" і "-15" займуть однакову кількість місця
+                        d_str = str(d_t).rjust(3)
+                        n_str = str(n_t).rjust(3)
+                        
+                        report += f"{icon} <code>{city_label.ljust(17)} {d_str}° | {n_str}°</code>\n"
                         summary_text += f"{item['name']}: {d_t}/{n_t}C. "
             except:
                 report += f"❌ {item['name']}: помилка\n"
@@ -86,11 +91,12 @@ async def manual(message: types.Message):
             await message.answer(text)
 
 async def main():
-    print("🚀 БОТ ЗАПУЩЕНИЙ (РІВНІ СТОВПЧИКИ)")
+    print("🚀 ЕТАЛОН v8 (MOBILE READY) ЗАПУЩЕНО")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
