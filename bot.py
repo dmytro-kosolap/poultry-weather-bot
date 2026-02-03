@@ -9,7 +9,7 @@ from google import genai
 # === ТВОЇ ДАНІ ===
 TOKEN = "8049414176:AAGDwkRxqHU3q9GdZPleq3c4-V2Aep3nipw"
 WEATHER_KEY = "d51d1391f46e9ac8d58cf6a1b908ac66"
-GEMINI_KEY = "AIzaSyBohuxWudkXZ7OfgIIGbci8aFbriaa9wR4" # Твій ключ Gemini
+GEMINI_KEY = "AIzaSyCI6btpcCFZIrrsq9CzaVMwnb3ckpztpk0" # Твій ключ Gemini
 
 client = genai.Client(api_key=GEMINI_KEY.strip())
 bot = Bot(token=TOKEN)
@@ -78,6 +78,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
