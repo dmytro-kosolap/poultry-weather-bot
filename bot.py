@@ -88,9 +88,9 @@ async def get_poultry_advice(summary):
             return response.text.strip()
         return "Забезпечте тепло та калорійний корм."
     except Exception as e:
-        # Якщо знову ліміт (429), ми побачимо це в консолі
-        print(f"Gemini Error: {e}")
-        return "Порада: Через морози додайте більше корму в раціон та утепліть підстилку."
+        # Цей рядок виведе помилку прямо тобі в очі в термінал
+        print(f"!!! КРИТИЧНА ПОМИЛКА ШІ: {e}") 
+        return f"Порада: тримайте птицю в теплі. (Технічна помилка: {str(e)})"
 
 async def send_daily_report(chat_id):
     tomorrow_str = (datetime.now(kyiv_tz) + timedelta(days=1)).strftime("%d.%m.%Y")
@@ -141,6 +141,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
