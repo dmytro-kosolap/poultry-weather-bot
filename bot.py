@@ -1,5 +1,4 @@
-cd ~/poultry_bot
-cat > bot.py << 'EOF'
+cd ~/poultry_bot && cat > bot.py << 'EOF'
 import asyncio
 import aiohttp
 import aiocron
@@ -7,7 +6,6 @@ from datetime import datetime, timedelta
 import pytz
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
-from aiogram.filters import Command
 from google import genai
 import logging
 import os
@@ -33,13 +31,12 @@ if not all([TOKEN, WEATHER_KEY, GEMINI_KEY]):
     logger.error("❌ Не знайдено всі ключі в .env!")
     exit(1)
 
-logger.info("✅ Ключі завантажено")
+logger.info("✅ Ключі завантажені")
 
 client = genai.Client(api_key=GEMINI_KEY)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Тільки цей ID може писати боту
 ADMIN_ID = 708323174
 
 ICONS = {
@@ -91,11 +88,13 @@ async def get_weather_forecast():
                 logger.error(f"Помилка {c['name']}: {e}")
                 report += f"❌ <code>{c['name'].ljust(17)} помилка</code>\n"
 
-    # Скорочені поради (~400 знаків)
+    # ДУЖЕ КОРОТКІ ПОРАДИ (макс 2-3 речення)
     try:
-        prompt = f"Ти птахівник в Україні. Завтра: {summary}. Дай коротку пораду на 400 знаків українською про догляд за птицею в таку погоду."
+        prompt = f"Ти птахівник в Україні. Завтра: {summary}. Напиши 2-3 короткі речення українською поради для птахівників. Максимум 250 символів."
         resp = client.models.generate_content(model="models/gemini-2.5-flash-lite", contents=prompt)
-        advice = f"\n\n📝 <b>ПОРАДА:</b>\n\n{resp.text}"
+        # Обрізаємо якщо все ще довго
+        text = resp.text[:300] + "..." if len(resp.text) > 300 else resp.text
+        advice = f"\n\n📝 <b>ПОРАДА:</b> {text}"
         logger.info("✅ Поради отримано")
     except Exception as e:
         logger.error(f"❌ Gemini помилка: {e}")
@@ -103,7 +102,6 @@ async def get_weather_forecast():
 
     return report + advice + "\n\n<b>Вдалого господарювання! 🐔</b>"
 
-# РОЗСИЛКА О 19:00 (змінено з 22:00)
 @aiocron.crontab('0 19 * * *', tz=pytz.timezone('Europe/Kiev'))
 async def daily():
     logger.info("🕐 Запуск розсилки о 19:00...")
@@ -114,13 +112,11 @@ async def daily():
     except Exception as e:
         logger.error(f"❌ Помилка розсилки: {e}")
 
-# ТІЛЬКИ ДЛЯ АДМІНА (ID 708323174)
 @dp.message()
 async def manual(m: types.Message):
-    # Перевірка ID
     if m.from_user.id != ADMIN_ID:
         logger.warning(f"❌ Спроба доступу від {m.from_user.id}")
-        return  # Ігноруємо чужі повідомлення
+        return
     
     logger.info(f"👤 Ручний запит від адміна {m.from_user.id}")
     try:
