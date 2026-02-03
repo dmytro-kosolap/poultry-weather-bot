@@ -5,19 +5,22 @@ from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from openai import OpenAI
+import sys
 
 # === ТВОЇ ДАНІ ===
 TOKEN = "8049414176:AAGDwkRxqHU3q9GdZPleq3c4-V2Aep3nipw"
 WEATHER_KEY = "d51d1391f46e9ac8d58cf6a1b908ac66"
 DEEPSEEK_KEY = "sk-922836d3a6b94ab9a43ce0b9934b5d4d"
 
-# Налаштування під DeepSeek (використовує стандарт OpenAI)
-client = OpenAI(api_key=DEEPSEEK_KEY.strip(), base_url="https://api.deepseek.com")
+# Налаштування з таймаутом, щоб бот не висів вічно
+client = OpenAI(
+    api_key=DEEPSEEK_KEY.strip(), 
+    base_url="https://api.deepseek.com",
+    timeout=20.0 
+)
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
-
-ICONS = {"ясно": "☀️", "хмарно": "☁️", "хмарність": "⛅", "дощ": "🌧", "сніг": "❄️", "туман": "🌫", "злива": "🌦"}
 
 async def get_weather_forecast():
     cities = {"Київ": "Kyiv", "Одеса": "Odesa", "Львів": "Lviv", "Харків": "Kharkiv", "Чернігів": "Chernihiv"}
@@ -32,56 +35,51 @@ async def get_weather_forecast():
                 async with session.get(url, timeout=10) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        d_t, n_t, desc = "Н/Д", "Н/Д", "хмарно"
+                        d_t, n_t = "Н/Д", "Н/Д"
                         for entry in data['list']:
                             if tomorrow in entry['dt_txt']:
-                                if "12:00:00" in entry['dt_txt']:
-                                    d_t = round(entry['main']['temp'])
-                                    desc = entry['weather'][0]['description']
-                                if "00:00:00" in entry['dt_txt']:
-                                    n_t = round(entry['main']['temp'])
-                        
-                        icon = "☁️"
-                        for k, v in ICONS.items():
-                            if k in desc.lower(): icon = v; break
-                        report += f"{icon} **{name}**: День {d_t}° | Ніч {n_t}°\n"
-                        summary_text += f"{name}: вдень {d_t}, вночі {n_t}, {desc}. "
-            except: report += f"❌ {name}: помилка\n"
+                                if "12:00:00" in entry['dt_txt']: d_t = round(entry['main']['temp'])
+                                if "00:00:00" in entry['dt_txt']: n_t = round(entry['main']['temp'])
+                        report += f"📍 **{name}**: День {d_t}° | Ніч {n_t}°\n"
+                        summary_text += f"{name}: {d_t}/{n_t}. "
+            except Exception as e:
+                report += f"❌ {name}: помилка мережі\n"
 
-    # --- БЛОК DEEPSEEK ---
+    # --- ДІАГНОСТИКА DEEPSEEK ---
+    print(f"DEBUG: Надсилаю запит до DeepSeek з ключем: {DEEPSEEK_KEY[:5]}***")
     try:
         response = client.chat.completions.create(
             model="deepseek-chat",
             messages=[
-                {"role": "system", "content": "Ти професійний український технолог-птахівник. Давай розгорнуті поради (1000 символів) щодо годівлі, вентиляції та води."},
-                {"role": "user", "content": f"Склади поради на основі погоди: {summary_text}. Особлива увага морозам."}
-            ],
-            stream=False
+                {"role": "system", "content": "Ти птахівник. Дай пораду на 500 символів."},
+                {"role": "user", "content": f"Погода: {summary_text}"}
+            ]
         )
-        advice = f"\n📝 **ПОРАДИ ПТАХІВНИКАМ:**\n\n{response.choices[0].message.content}"
+        advice = f"\n📝 **ПОРАДА:**\n\n{response.choices[0].message.content}"
+        print("DEBUG: Відповідь від DeepSeek отримана успішно!")
     except Exception as e:
-        advice = f"\n\n❌ Помилка DeepSeek: {str(e)[:50]}"
+        error_type = type(e).__name__
+        error_msg = str(e)
+        print(f"DEBUG ERROR: {error_type} - {error_msg}")
+        advice = f"\n\n❌ **ДІАГНОСТИКА ШІ:**\nТип: {error_type}\nДеталі: {error_msg[:100]}"
 
     return report + advice
-
-@aiocron.crontab('0 19 * * *')
-async def daily_job():
-    text = await get_weather_forecast()
-    await bot.send_message(-1001761937362, text, parse_mode=ParseMode.MARKDOWN)
 
 @dp.message()
 async def manual(message: types.Message):
     if message.from_user.id == 708323174:
-        status_msg = await message.answer("🔍 DeepSeek аналізує погоду та готує поради...")
+        print(f"DEBUG: Отримано команду від адміна {message.from_user.id}")
+        msg = await message.answer("🧪 Запуск діагностики DeepSeek...")
         text = await get_weather_forecast()
-        await status_msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
+        await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
 
 async def main():
-    print("🚀 БОТ НА DEEPSEEK ЗАПУЩЕНО")
+    print("🚀 ДІАГНОСТИЧНИЙ РЕЖИМ ЗАПУЩЕНО")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
