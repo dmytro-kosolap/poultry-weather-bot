@@ -1,3 +1,5 @@
+cd ~/poultry_bot
+cat > bot.py << 'EOF'
 import asyncio
 import aiohttp
 import aiocron
@@ -5,7 +7,7 @@ from datetime import datetime, timedelta
 import pytz
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
-import google.generativeai as genai
+from google import genai
 import logging
 
 # Налаштування логування у файл
@@ -24,8 +26,8 @@ TOKEN = "8049414176:AAGDwkRxqHU3q9GdZPleq3c4-V2Aep3nipw"
 WEATHER_KEY = "d51d1391f46e9ac8d58cf6a1b908ac66"
 GEMINI_KEY = "AIzaSyCI6btpcCFZIrrsq9CzaVMwnb3ckpztpk0"
 
-# Налаштування Gemini
-genai.configure(api_key=GEMINI_KEY)
+# Налаштування Gemini (нова бібліотека)
+client = genai.Client(api_key=GEMINI_KEY)
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -102,11 +104,10 @@ async def get_weather_forecast():
                 logger.error(f"Помилка отримання погоди для {item['name']}: {e}")
                 report += f"❌ <code>{item['name'].ljust(17)} помилка</code>\n"
 
-    # Отримання порад від Gemini
+    # Отримання порад від Gemini (нова бібліотека)
     try:
         prompt = f"Ти досвідчений птахівник в Україні. Завтра прогнозуються такі температури: {summary_text}. Дай корисну пораду птахівникам українською мовою на 800 знаків про те, як підготувати курник та доглядати за птицею в таку погоду."
-        model = genai.GenerativeModel('gemini-pro')  # ЗМІНЕНО: з gemini-1.5-flash на gemini-pro
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(model="gemini-2.0-flash-exp", contents=prompt)
         advice = f"\n\n📝 <b>ПОРАДИ ПТАХІВНИКАМ:</b>\n\n{response.text}"
         logger.info("Поради від Gemini отримано успішно")
     except Exception as e:
@@ -159,6 +160,8 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+EOF
+
 
 
 
