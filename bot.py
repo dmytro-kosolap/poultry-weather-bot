@@ -18,7 +18,6 @@ dp = Dispatcher()
 ICONS = {"ясно": "☀️", "хмарно": "☁️", "хмарність": "⛅", "дощ": "🌧", "сніг": "❄️", "туман": "🌫", "злива": "🌦"}
 
 async def get_weather_forecast():
-    # Назви регіонів з однаковою кількістю символів для вирівнювання
     cities_config = [
         {"reg": "Центр",  "name": "Київ",     "eng": "Kyiv"},
         {"reg": "Південь", "name": "Одеса",    "eng": "Odesa"},
@@ -42,24 +41,35 @@ async def get_weather_forecast():
                 async with session.get(url, timeout=10) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        d_t, n_t, desc = "??", "??", "хмарно"
+                        # Збираємо всі температури за завтрашню добу
+                        day_temps = []
+                        descriptions = []
+                        
                         for entry in data['list']:
                             if tomorrow_iso in entry['dt_txt']:
-                                if "12:00:00" in entry['dt_txt']:
-                                    d_t = round(entry['main']['temp'])
-                                    desc = entry['weather'][0].get('description', 'хмарно')
-                                if "00:00:00" in entry['dt_txt'] or "03:00:00" in entry['dt_txt']:
-                                    n_t = round(entry['main']['temp'])
+                                day_temps.append(entry['main']['temp'])
+                                descriptions.append(entry['weather'][0].get('description', 'хмарно'))
+                        
+                        if day_temps:
+                            d_t = round(max(day_temps)) # Максимум за добу - це День
+                            n_t = round(min(day_temps)) # Мінімум за добу - це Ніч
+                            desc = descriptions[len(descriptions)//2] # Беремо опис з середини дня
+                        else:
+                            d_t, n_t, desc = "??", "??", "хмарно"
                         
                         icon = "☁️"
                         for k, v in ICONS.items():
                             if k in desc.lower(): icon = v; break
                         
-                        # Форматування рядка для ідеального вирівнювання "паличок"
-                        # ljust(17) - місце під назву, rjust(3) - під температуру
+                        def fmt_temp(t):
+                            if isinstance(t, int):
+                                if t > 0: return f"+{t}"
+                                return str(t)
+                            return t
+
                         city_part = f"{item['reg']} ({item['name']})".ljust(17)
-                        day_part = str(d_t).rjust(3)
-                        night_part = str(n_t).rjust(3)
+                        day_part = fmt_temp(d_t).rjust(4)
+                        night_part = fmt_temp(n_t).rjust(4)
                         
                         report += f"{icon} <code>{city_part} {day_part}° | {night_part}°</code>\n"
                         summary_text += f"{item['name']}: {d_t}/{n_t}C. "
@@ -90,11 +100,12 @@ async def manual(message: types.Message):
             await message.answer(text)
 
 async def main():
-    print("🚀 БОТ ЗАПУЩЕНИЙ (ГЕОМЕТРІЯ ВИРІВНЯНА)")
+    print("🚀 ЕТАЛОН v11 (ТОЧНИЙ ПРОГНОЗ) ЗАПУЩЕНИЙ")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
