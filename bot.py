@@ -4,20 +4,14 @@ import aiocron
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
-from openai import OpenAI
+from google import genai
 
 # === ТВОЇ ДАНІ ===
 TOKEN = "8049414176:AAGDwkRxqHU3q9GdZPleq3c4-V2Aep3nipw"
 WEATHER_KEY = "d51d1391f46e9ac8d58cf6a1b908ac66"
-DEEPSEEK_KEY = "sk-922836d3a6b94ab9a43ce0b9934b5d4d"
+GEMINI_KEY = "AIzaSyCI6btpcCFZIrrsq9CzaVMwnb3ckpztpk0" 
 
-# Налаштування клієнта з жорстким таймаутом (15 сек)
-client = OpenAI(
-    api_key=DEEPSEEK_KEY.strip(), 
-    base_url="https://api.deepseek.com",
-    timeout=15.0
-)
-
+client = genai.Client(api_key=GEMINI_KEY.strip())
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
@@ -25,11 +19,9 @@ ICONS = {"ясно": "☀️", "хмарно": "☁️", "хмарність": "
 
 async def get_weather_forecast():
     cities = {"Київ": "Kyiv", "Одеса": "Odesa", "Львів": "Lviv", "Харків": "Kharkiv", "Чернігів": "Chernihiv"}
-    tomorrow_dt = datetime.now() + timedelta(days=1)
-    tomorrow_str = tomorrow_dt.strftime("%Y-%m-%d")
-    
-    report = f"📅 <b>ПРОГНОЗ НА ЗАВТРА ({tomorrow_str})</b>\n\n"
-    summary_for_ai = ""
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    report = f"📅 <b>ПРОГНОЗ НА ЗАВТРА ({tomorrow})</b>\n\n"
+    summary_text = ""
 
     async with aiohttp.ClientSession() as session:
         for name, eng in cities.items():
@@ -40,7 +32,7 @@ async def get_weather_forecast():
                         data = await resp.json()
                         d_t, n_t, desc = "Н/Д", "Н/Д", "хмарно"
                         for entry in data['list']:
-                            if tomorrow_str in entry['dt_txt']:
+                            if tomorrow in entry['dt_txt']:
                                 if "12:00:00" in entry['dt_txt']:
                                     d_t = round(entry['main']['temp'])
                                     desc = entry['weather'][0].get('description', 'хмарно')
@@ -50,52 +42,50 @@ async def get_weather_forecast():
                         icon = "☁️"
                         for k, v in ICONS.items():
                             if k in desc.lower(): icon = v; break
-                        
                         report += f"{icon} <b>{name}</b>: День {d_t}° | Ніч {n_t}°\n"
-                        summary_for_ai += f"{name}: {d_t}/{n_t}C, {desc}. "
-            except:
-                report += f"❌ {name}: помилка мережі\n"
+                        summary_text += f"{name}: {d_t}/{n_t}C, {desc}. "
+            except: report += f"❌ {name}: помилка\n"
 
-    # --- БЛОК DEEPSEEK ---
+    # --- БЛОК GEMINI ---
     try:
-        # Використовуємо спрощений промпт, щоб уникнути помилок кодування
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": "Ти птахівник. Напиши розгорнуту пораду українською на 800 символів. Не використовуй символи * або _."},
-                {"role": "user", "content": f"Погода завтра: {summary_for_ai}"}
-            ]
+        prompt = (
+            f"Ти провідний технолог-птахівник. Прогноз на завтра: {summary_text}. "
+            "Напиши розгорнуту професійну пораду на 1000 символів українською мовою. "
+            "Дай конкретні поради щодо калорійності корму при таких морозах, вентиляції та замерзанні води. "
+            "НЕ ВИКОРИСТОВУЙ символи * або _ або #. Тільки чистий текст."
         )
-        content = response.choices[0].message.content
-        advice = f"\n📝 <b>ПОРАДИ ПТАХІВНИКАМ:</b>\n\n{content}"
+        response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
+        advice = f"\n📝 <b>ПОРАДИ ПТАХІВНИКАМ:</b>\n\n{response.text}"
     except Exception as e:
-        # Якщо впало — ми побачимо причину в терміналі
-        print(f"ERROR DeepSeek: {e}")
-        advice = f"\n\n⚠️ Порада від ШІ зараз недоступна. Технічна помилка: {str(e)[:50]}"
+        advice = f"\n\n⚠️ Порада від ШІ тимчасово недоступна. Технічна затримка."
 
     return report + advice
 
 @aiocron.crontab('0 19 * * *')
-async def scheduled_post():
-    res = await get_weather_forecast()
-    await bot.send_message(-1001761937362, res, parse_mode=ParseMode.HTML)
+async def daily_job():
+    text = await get_weather_forecast()
+    # Використовуємо HTML для щоденної розсилки
+    await bot.send_message(-1001761937362, text, parse_mode=ParseMode.HTML)
 
 @dp.message()
-async def handle_message(message: types.Message):
+async def manual(message: types.Message):
     if message.from_user.id == 708323174:
-        status_msg = await message.answer("🕒 Зв'язуюсь із DeepSeek, зачекайте...")
-        full_report = await get_weather_forecast()
+        status_msg = await message.answer("🔍 Повертаємось на Gemini... Готую звіт...")
+        text = await get_weather_forecast()
         try:
-            await status_msg.edit_text(full_report, parse_mode=ParseMode.HTML)
+            # Спроба відправити з HTML
+            await status_msg.edit_text(text, parse_mode=ParseMode.HTML)
         except:
-            await status_msg.edit_text(full_report)
+            # Якщо ШІ все одно вліпив заборонений символ — шлемо простим текстом
+            await status_msg.edit_text(text)
 
 async def main():
-    print("🚀 ЕТАЛОН v4 АКТИВОВАНО. Чекаю повідомлення...")
+    print("🚀 ЕТАЛОН (GEMINI FREE) ЗАПУЩЕНО")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
