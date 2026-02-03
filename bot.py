@@ -1,73 +1,96 @@
 import asyncio
 import aiohttp
 import aiocron
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
+from aiogram.enums import ParseMode
 import google.generativeai as genai
 
-# === ТВОЇ ДАНІ (Еталонні) ===
+# === ТВОЇ ДАНІ ===
 TOKEN = "8049414176:AAGDwkRxqHU3q9GdZPleq3c4-V2Aep3nipw"
 WEATHER_KEY = "d51d1391f46e9ac8d58cf6a1b908ac66"
-GEMINI_KEY = "AIzaSyAVUWNX8E6nVeu3i7mOM7Qk9IKekFduxkk" # Твій ключ Gemini
-ADMIN_ID = 708323174
-GROUP_ID = -1001761937362
+GEMINI_KEY = "AIzaSyAVUWNX8E6nVeu3i7mOM7Qk9IKekFduxkk" 
 
-# Налаштування Gemini (з чисткою пробілів)
 genai.configure(api_key=GEMINI_KEY.strip())
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-async def get_full_report():
+# Словник іконок
+ICONS = {
+    "ясно": "☀️", "хмарно": "☁️", "хмарність": "⛅", 
+    "дощ": "🌧", "сніг": "❄️", "туман": "🌫", "злива": "🌦"
+}
+
+async def get_weather_forecast():
     cities = {"Київ": "Kyiv", "Одеса": "Odesa", "Львів": "Lviv", "Харків": "Kharkiv", "Чернігів": "Chernihiv"}
-    report = "📊 ПОКАЗНИКИ ТЕМПЕРАТУРИ:\n\n"
+    tomorrow_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    report = f"📅 **ПРОГНОЗ НА ЗАВТРА ({tomorrow_date})**\n\n"
     summary_for_ai = ""
 
     async with aiohttp.ClientSession() as session:
         for name, eng in cities.items():
-            url = f"http://api.openweathermap.org/data/2.5/weather?q={eng}&appid={WEATHER_KEY}&units=metric&lang=uk"
+            # Використовуємо /forecast замість /weather
+            url = f"http://api.openweathermap.org/data/2.5/forecast?q={eng}&appid={WEATHER_KEY}&units=metric&lang=uk"
             try:
                 async with session.get(url, timeout=10) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        temp = round(data['main']['temp'])
-                        report += f"✅ {name}: {temp}°C\n"
-                        summary_for_ai += f"{name}: {temp}°C; "
-                    else:
-                        report += f"❌ {name}: помилка\n"
-            except:
-                report += f"❌ {name}: офлайн\n"
+                        day_temp, night_temp, desc = "Н/Д", "Н/Д", "мінлива хмарність"
+                        
+                        # Шукаємо прогноз на завтра: 12:00 (день) та 00:00 (ніч)
+                        for entry in data['list']:
+                            if tomorrow_date in entry['dt_txt']:
+                                if "12:00:00" in entry['dt_txt']:
+                                    day_temp = round(entry['main']['temp'])
+                                    desc = entry['weather'][0]['description']
+                                if "00:00:00" in entry['dt_txt']:
+                                    night_temp = round(entry['main']['temp'])
 
-    # Додаємо пораду ШІ
+                        # Вибір іконки
+                        icon = "☁️"
+                        for key, emoji in ICONS.items():
+                            if key in desc.lower():
+                                icon = emoji
+                                break
+                        
+                        report += f"{icon} **{name}**: День {day_temp}° | Ніч {night_temp}°\n"
+                        summary_for_ai += f"{name}: день {day_temp}, ніч {night_temp}, {desc}; "
+            except:
+                report += f"❌ {name}: дані відсутні\n"
+
+    # Запит до Gemini
+    prompt = (
+        f"Ти експерт-птахівник. Завтра така погода в регіонах: {summary_for_ai}. "
+        "Напиши розгорнуту пораду (800 символів). Опиши ризики замерзання води, "
+        "потребу в енергії (корм) та вентиляції. Пиши професійно."
+    )
     try:
-        prompt = f"Погода: {summary_for_ai}. Напиши розгорнуту пораду птахівнику (800 символів) про корм та тепло."
         response = model.generate_content(prompt)
-        advice = f"\n\n📝 **ПОРАДА ПТАХІВНИКУ:**\n\n{response.text}"
+        advice = f"\n📝 **ПОРАДИ ПТАХІВНИКАМ:**\n\n{response.text}"
     except:
-        advice = "\n\nПорада: Слідкуйте за обігрівом пташників."
+        advice = "\n\n⚠️ Порада від ШІ недоступна. Перевірте обігрів."
 
     return report + advice
 
-# Автоматика на 19:00
 @aiocron.crontab('0 19 * * *')
-async def scheduled_post():
-    res = await get_full_report()
-    await bot.send_message(GROUP_ID, res, parse_mode="Markdown")
+async def daily_job():
+    text = await get_weather_forecast()
+    await bot.send_message(-1001761937362, text, parse_mode=ParseMode.MARKDOWN)
 
 @dp.message()
-async def handle(message: types.Message):
-    if message.from_user.id == ADMIN_ID:
-        res = await get_full_report()
-        await message.answer(res, parse_mode="Markdown")
+async def manual(message: types.Message):
+    if message.from_user.id == 708323174:
+        wait_msg = await message.answer("🔍 Аналізую метеодані та готую поради...")
+        text = await get_weather_forecast()
+        await wait_msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
 
 async def main():
-    print("🔥 ЕТАЛОН ЗАПУЩЕНО! РОЗСИЛКА О 19:00.")
+    print("🚀 ПОВНОЦІННИЙ ЕКСПЕРТ ЗАПУЩЕНИЙ!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
 
-if __name__ == "__main__":
-    asyncio.run(main())
-EOF
 
