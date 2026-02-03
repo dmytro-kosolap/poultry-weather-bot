@@ -29,7 +29,7 @@ async def get_weather_forecast():
     tomorrow_iso = tomorrow_dt.strftime("%Y-%m-%d")
     
     # Початок звіту
-    header = f"📅 <b>ПРОГНОЗ НА ЗАВТРА ({date_rev})</b>\n\n"
+    header = f"📅 <b>ПРОГНОЗ ПОГОДИ НА ЗАВТРА ({date_rev})</b>\n\n"
     # Відкриваємо блок моноширинного тексту для всієї таблиці
     table_content = "Регіон (Місто)      День | Ніч\n"
     table_content += "-------------------------------\n"
@@ -68,7 +68,7 @@ async def get_weather_forecast():
         response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
         advice = f"\n📝 <b>ПОРАДИ ПТАХІВНИКАМ:</b>\n\n{response.text}"
     except:
-        advice = "\n\n⚠️ Порада від ШІ зараз готується. Перевірте обігрів при морозах!"
+        advice = "\n\n⚠️ Порада від ШІ наразі недоступна."
 
     return header + full_table + advice + "\n\n<b>Вдалого господарювання!</b>"
 
@@ -83,6 +83,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
