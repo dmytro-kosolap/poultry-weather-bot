@@ -9,7 +9,7 @@ from google import genai
 # === ТВОЇ ДАНІ ===
 TOKEN = "8049414176:AAGDwkRxqHU3q9GdZPleq3c4-V2Aep3nipw"
 WEATHER_KEY = "d51d1391f46e9ac8d58cf6a1b908ac66"
-GEMINI_KEY = "ВСТАВ_СЮДИ_КЛЮЧ" 
+GEMINI_KEY = "AIzaSyBohuxWudkXZ7OfgIIGbci8aFbriaa9wR4" # Твій ключ Gemini
 
 client = genai.Client(api_key=GEMINI_KEY.strip())
 bot = Bot(token=TOKEN)
@@ -43,19 +43,20 @@ async def get_weather_forecast():
                         for k, v in ICONS.items():
                             if k in desc.lower(): icon = v; break
                         report += f"{icon} **{name}**: День {d_t}° | Ніч {n_t}°\n"
-                        summary_text += f"{name}: {d_t} вдень, {n_t} вночі. "
+                        summary_text += f"{name}: {d_t} in day, {n_t} at night. " # Використовуємо латиницю для ШІ, щоб уникнути помилок кодування
             except: report += f"❌ {name}: помилка\n"
 
-    # --- СПРОЩЕНИЙ БЛОК GEMINI ---
+    # --- ВИПРАВЛЕНИЙ БЛОК GEMINI ---
     try:
-        # Використовуємо спрощений виклик без зайвих параметрів
+        # Формуємо запит так, щоб уникнути проблем з кодуванням
+        prompt = f"Poultry expert advice for weather: {summary_text}. Write in UKRAINIAN 1000 symbols."
         response = client.models.generate_content(
             model="gemini-1.5-flash", 
-            contents=f"Ти експерт-птахівник. Дай розгорнуту пораду на 1000 символів для птахівників, враховуючи мороз: {summary_text}"
+            contents=prompt
         )
         advice = f"\n📝 **ПОРАДИ ПТАХІВНИКАМ:**\n\n{response.text}"
     except Exception as e:
-        advice = f"\n\n❌ Помилка Gemini: {str(e)[:50]}"
+        advice = f"\n\n❌ Помилка Gemini: Перевірте ключ або з'єднання."
 
     return report + advice
 
@@ -67,18 +68,17 @@ async def daily_job():
 @dp.message()
 async def manual(message: types.Message):
     if message.from_user.id == 708323174:
-        # Відправляємо проміжне повідомлення
         status_msg = await message.answer("🔍 Аналізую морози та готую поради...")
         text = await get_weather_forecast()
-        # Редагуємо його, додаючи фінальний текст
         await status_msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
 
 async def main():
-    print("🚀 ЕТАЛОН v2 АКТИВОВАНО")
+    print("🚀 ЕТАЛОН v3 (UTF-8 FIX) ЗАПУЩЕНО")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
