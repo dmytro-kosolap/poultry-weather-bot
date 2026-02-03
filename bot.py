@@ -76,23 +76,21 @@ def get_weather_day_night(city):
 
 async def get_poultry_advice(summary):
     tomorrow_date = (datetime.now(kyiv_tz) + timedelta(days=1)).strftime("%d.%m.%Y")
+    # Просимо дуже просто, щоб зекономити ліміти
     prompt = (
-        f"Ти професійний технолог-птахівник. На завтра {tomorrow_date} такий прогноз погоди: {summary}. "
-        f"Напиши розгорнуту пораду птахівникам на 4-5 речень. "
-        f"Обов'язково згадай: як підготувати напувалки до морозів, чому треба додати кукурудзу в корм "
-        f"та яка товщина підстилки врятує птицю вночі. Будь конкретним, пиши цифри."
+        f"Ти професійний птахівник. На завтра {tomorrow_date} погода: {summary}. "
+        f"Напиши 3 довгих поради про воду, корм та тепло. Пиши детально."
     )
     try:
-        # Додаємо конфігурацію, щоб він не жадничав на слова
-        response = model.generate_content(
-            prompt,
-            generation_config={"max_output_tokens": 800, "temperature": 0.8}
-        )
-        return response.text.strip()
+        # Використовуємо просту генерацію без наворотів
+        response = model.generate_content(prompt)
+        if response and response.text:
+            return response.text.strip()
+        return "Забезпечте тепло та калорійний корм."
     except Exception as e:
-        print(f"Помилка Gemini: {e}")
-        # Якщо все одно помилка, давай виведемо її частину в бот, щоб ми бачили, що не так
-        return f"Порада: тримайте птицю в теплі. (Технічна помилка: {str(e)[:50]})"
+        # Якщо знову ліміт (429), ми побачимо це в консолі
+        print(f"Gemini Error: {e}")
+        return "Порада: Через морози додайте більше корму в раціон та утепліть підстилку."
 
 async def send_daily_report(chat_id):
     tomorrow_str = (datetime.now(kyiv_tz) + timedelta(days=1)).strftime("%d.%m.%Y")
@@ -143,6 +141,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
