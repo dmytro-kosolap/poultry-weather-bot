@@ -45,6 +45,12 @@ ICONS = {
     "злива": "🌦", "гроза": "⛈"
 }
 
+def truncate_text(text, max_len=250):
+    """Обрізає текст до max_len символів"""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len].rsplit(' ', 1)[0] + "..."
+
 async def get_weather_forecast():
     cities = [
         {"reg": "Центр", "name": "Київ", "eng": "Kyiv"},
@@ -88,14 +94,14 @@ async def get_weather_forecast():
                 logger.error(f"Помилка {c['name']}: {e}")
                 report += f"❌ <code>{c['name'].ljust(17)} помилка</code>\n"
 
-    # ДУЖЕ КОРОТКІ ПОРАДИ (макс 2-3 речення)
+    # КОРОТКІ ПОРАДИ (макс 250 символів)
     try:
-        prompt = f"Ти птахівник в Україні. Завтра: {summary}. Напиши 2-3 короткі речення українською поради для птахівників. Максимум 250 символів."
+        prompt = f"Ти птахівник. Завтра: {summary}. Напиши 1-2 речення українською поради. Коротко, по суті."
         resp = client.models.generate_content(model="models/gemini-2.5-flash-lite", contents=prompt)
-        # Обрізаємо якщо все ще довго
-        text = resp.text[:300] + "..." if len(resp.text) > 300 else resp.text
-        advice = f"\n\n📝 <b>ПОРАДА:</b> {text}"
-        logger.info("✅ Поради отримано")
+        # Жорстке обрізання
+        short_text = truncate_text(resp.text, 250)
+        advice = f"\n\n📝 <b>ПОРАДА:</b> {short_text}"
+        logger.info(f"✅ Поради отримано ({len(short_text)} символів)")
     except Exception as e:
         logger.error(f"❌ Gemini помилка: {e}")
         advice = "\n\n⚠️ <b>ШІ в режимі сну</b>"
