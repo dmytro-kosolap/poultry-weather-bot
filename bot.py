@@ -18,12 +18,12 @@ dp = Dispatcher()
 ICONS = {"ясно": "☀️", "хмарно": "☁️", "хмарність": "⛅", "дощ": "🌧", "сніг": "❄️", "туман": "🌫", "злива": "🌦"}
 
 async def get_weather_forecast():
-    # Додаємо пробіли в назви регіонів для однакової довжини
+    # Назви регіонів з однаковою кількістю символів для вирівнювання
     cities_config = [
-        {"reg": "Центр ", "name": "Київ", "eng": "Kyiv"},
-        {"reg": "Південь", "name": "Одеса", "eng": "Odesa"},
-        {"reg": "Захід ", "name": "Львів", "eng": "Lviv"},
-        {"reg": "Схід  ", "name": "Харків", "eng": "Kharkiv"},
+        {"reg": "Центр",  "name": "Київ",     "eng": "Kyiv"},
+        {"reg": "Південь", "name": "Одеса",    "eng": "Odesa"},
+        {"reg": "Захід",  "name": "Львів",    "eng": "Lviv"},
+        {"reg": "Схід",   "name": "Харків",   "eng": "Kharkiv"},
         {"reg": "Північ", "name": "Чернігів", "eng": "Chernihiv"}
     ]
     
@@ -32,7 +32,6 @@ async def get_weather_forecast():
     tomorrow_iso = tomorrow_dt.strftime("%Y-%m-%d")
     
     report = f"📅 <b>ПРОГНОЗ НА ЗАВТРА ({date_rev})</b>\n\n"
-    # Заголовок у моноширинному форматі
     report += "<code>Регіон (Місто)      День | Ніч</code>\n"
     summary_text = ""
 
@@ -56,13 +55,13 @@ async def get_weather_forecast():
                         for k, v in ICONS.items():
                             if k in desc.lower(): icon = v; break
                         
-                        # Форматування: назва (16 символів) + температури (по 3 символи на кожну)
-                        city_label = f"{item['reg']} ({item['name']})"
-                        # rjust(3) гарантує, що "-5" і "-15" займуть однакову кількість місця
-                        d_str = str(d_t).rjust(3)
-                        n_str = str(n_t).rjust(3)
+                        # Форматування рядка для ідеального вирівнювання "паличок"
+                        # ljust(17) - місце під назву, rjust(3) - під температуру
+                        city_part = f"{item['reg']} ({item['name']})".ljust(17)
+                        day_part = str(d_t).rjust(3)
+                        night_part = str(n_t).rjust(3)
                         
-                        report += f"{icon} <code>{city_label.ljust(17)} {d_str}° | {n_str}°</code>\n"
+                        report += f"{icon} <code>{city_part} {day_part}° | {night_part}°</code>\n"
                         summary_text += f"{item['name']}: {d_t}/{n_t}C. "
             except:
                 report += f"❌ {item['name']}: помилка\n"
@@ -91,11 +90,12 @@ async def manual(message: types.Message):
             await message.answer(text)
 
 async def main():
-    print("🚀 ЕТАЛОН v8 (MOBILE READY) ЗАПУЩЕНО")
+    print("🚀 БОТ ЗАПУЩЕНИЙ (ГЕОМЕТРІЯ ВИРІВНЯНА)")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
