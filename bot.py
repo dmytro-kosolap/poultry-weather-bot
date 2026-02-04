@@ -1,6 +1,5 @@
 import asyncio
 import aiohttp
-import aiocron
 from datetime import datetime, timedelta
 import pytz
 from aiogram import Bot, Dispatcher, types
@@ -37,6 +36,7 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 ADMIN_ID = 708323174
+CHAT_ID = -1001761937362
 
 ICONS = {
     "ясно": "☀️", "хмарно": "☁️", "хмарність": "⛅",
@@ -115,25 +115,48 @@ async def get_weather_forecast():
 
     return report + advice + "\n\n<b>Вдалого господарювання! 🐔</b>"
 
-@aiocron.crontab('0 19 * * *', tz=pytz.timezone('Europe/Kiev'))
-async def daily():
-    logger.info("🕐 Розсилка о 19:00...")
-    try:
-        text = await get_weather_forecast()
-        await bot.send_message(-1001761937362, text, parse_mode=ParseMode.HTML)
-        logger.info("✅ Надіслано!")
-    except Exception as e:
-        logger.error(f"❌ Помилка: {e}")
+async def daily_task():
+    """Розсилка о 19:00"""
+    while True:
+        now = datetime.now(pytz.timezone('Europe/Kiev'))
+        target = now.replace(hour=19, minute=0, second=0, microsecond=0)
+        
+        if now > target:
+            target += timedelta(days=1)
+        
+        wait_seconds = (target - now).total_seconds()
+        logger.info(f"⏳ Наступна розсилка через {wait_seconds/3600:.1f} годин (о 19:00)")
+        
+        await asyncio.sleep(wait_seconds)
+        
+        logger.info("🕐 Розсилка о 19:00...")
+        try:
+            text = await get_weather_forecast()
+            await bot.send_message(CHAT_ID, text, parse_mode=ParseMode.HTML)
+            logger.info("✅ Надіслано!")
+        except Exception as e:
+            logger.error(f"❌ Помилка: {e}")
 
-# ТЕСТОВЕ завдання на 20:15
-@aiocron.crontab('15 20 * * *', tz=pytz.timezone('Europe/Kiev'))
-async def test_cron():
-    logger.info("🧪 ТЕСТОВА РОЗСИЛКА о 20:15!")
-    try:
-        await bot.send_message(ADMIN_ID, "🧪 Тест cron: 20:15 спрацювало!", parse_mode=ParseMode.HTML)
-        logger.info("✅ Тест надіслано адміну!")
-    except Exception as e:
-        logger.error(f"❌ Тест помилка: {e}")
+async def test_task():
+    """Тестове завдання на 20:20"""
+    while True:
+        now = datetime.now(pytz.timezone('Europe/Kiev'))
+        target = now.replace(hour=20, minute=20, second=0, microsecond=0)
+        
+        if now > target:
+            target += timedelta(days=1)
+        
+        wait_seconds = (target - now).total_seconds()
+        logger.info(f"⏳ Тест через {wait_seconds/60:.1f} хвилин (о 20:20)")
+        
+        await asyncio.sleep(wait_seconds)
+        
+        logger.info("🧪 ТЕСТОВА РОЗСИЛКА о 20:20!")
+        try:
+            await bot.send_message(ADMIN_ID, "🧪 Тест cron: 20:20 спрацювало!", parse_mode=ParseMode.HTML)
+            logger.info("✅ Тест надіслано адміну!")
+        except Exception as e:
+            logger.error(f"❌ Тест помилка: {e}")
 
 @dp.message()
 async def manual(m: types.Message):
@@ -153,14 +176,12 @@ async def main():
     logger.info("🚀 БОТ ЗАПУЩЕНО")
     logger.info(f"⏰ 19:00 | 👤 {ADMIN_ID}")
     
-    # Запускаємо cron-завдання з логуванням
-    logger.info("⏳ Запуск cron-завдань...")
-    daily.start()
-    test_cron.start()
-    logger.info("✅ Cron-завдання активні!")
+    # Запускаємо фонові задачі
+    asyncio.create_task(daily_task())
+    asyncio.create_task(test_task())
+    logger.info("✅ Фонові задачі активні!")
     
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
