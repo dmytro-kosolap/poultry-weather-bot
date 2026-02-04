@@ -87,18 +87,18 @@ async def get_weather_forecast():
                 logger.error(f"Помилка {c['name']}: {e}")
                 report += f"❌ <code>{c['name'].ljust(17)} помилка</code>\n"
 
-    # ТЕСТ: Замість порад - жарт про птахівництво
+    # Порада з елементом жарту
     try:
-        prompt = "Розкажи короткий смішний жарт про курей або птахів, максимум 100 символів. Без форматування."
+        prompt = "Дай практичну пораду птахівникам на завтрашню погоду. Максимум 200 символів. Додай легкий жарт чи каламбур в кінці. Без форматування."
         
         resp = client.models.generate_content(
             model="gemini-2.0-flash-lite",
             contents=prompt
         )
         
-        joke = resp.text.strip()[:150]
-        advice = f"\n\n😄 <b>ЖАРТ ДНЯ:</b> {joke}"
-        logger.info(f"✅ Жарт: {len(joke)} симв.")
+        advice_text = resp.text.strip()[:200]
+        advice = f"\n\n💡 <b>ПОРАДА:</b> {advice_text}"
+        logger.info(f"✅ Порада: {len(advice_text)} симв.")
         
     except Exception as e:
         logger.error(f"❌ Gemini: {e}")
@@ -131,12 +131,10 @@ async def manual(m: types.Message):
         await m.answer("❌ Помилка")
 
 async def main():
-    logger.info("🚀 БОТ ЗАПУЩЕНО (ТЕСТОВИЙ РЕЖИМ)")
+    logger.info("🚀 БОТ ЗАПУЩЕНО")
     logger.info(f"⏰ 19:00 | 👤 {ADMIN_ID}")
     daily.start()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
