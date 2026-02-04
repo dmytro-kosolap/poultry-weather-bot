@@ -1,4 +1,3 @@
-cd ~/poultry_bot && cat > bot.py << 'EOF'
 import asyncio
 import aiohttp
 import aiocron
@@ -139,4 +138,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-EOF
+
+
