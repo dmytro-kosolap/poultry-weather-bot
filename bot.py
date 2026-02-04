@@ -125,12 +125,12 @@ async def daily():
     except Exception as e:
         logger.error(f"❌ Помилка: {e}")
 
-# ТЕСТОВЕ завдання на 20:10
-@aiocron.crontab('10 20 * * *', tz=pytz.timezone('Europe/Kiev'))
+# ТЕСТОВЕ завдання на 20:15
+@aiocron.crontab('15 20 * * *', tz=pytz.timezone('Europe/Kiev'))
 async def test_cron():
-    logger.info("🧪 ТЕСТОВА РОЗСИЛКА о 20:10!")
+    logger.info("🧪 ТЕСТОВА РОЗСИЛКА о 20:15!")
     try:
-        await bot.send_message(ADMIN_ID, "🧪 Тест cron: 20:10 спрацювало!", parse_mode=ParseMode.HTML)
+        await bot.send_message(ADMIN_ID, "🧪 Тест cron: 20:15 спрацювало!", parse_mode=ParseMode.HTML)
         logger.info("✅ Тест надіслано адміну!")
     except Exception as e:
         logger.error(f"❌ Тест помилка: {e}")
@@ -163,3 +163,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
