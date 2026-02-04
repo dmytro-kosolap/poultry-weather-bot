@@ -138,22 +138,22 @@ async def daily_task():
             logger.error(f"❌ Помилка: {e}")
 
 async def test_task():
-    """Тестове завдання на 20:20"""
+    """Тестове завдання на 21:20"""
     while True:
         now = datetime.now(pytz.timezone('Europe/Kiev'))
-        target = now.replace(hour=20, minute=20, second=0, microsecond=0)
+        target = now.replace(hour=21, minute=20, second=0, microsecond=0)
         
         if now > target:
             target += timedelta(days=1)
         
         wait_seconds = (target - now).total_seconds()
-        logger.info(f"⏳ Тест через {wait_seconds/60:.1f} хвилин (о 21:00)")
+        logger.info(f"⏳ Тест через {wait_seconds/60:.1f} хвилин (о 21:20)")
         
         await asyncio.sleep(wait_seconds)
         
-        logger.info("🧪 ТЕСТОВА РОЗСИЛКА о 20:20!")
+        logger.info("🧪 ТЕСТОВА РОЗСИЛКА о 21:20!")
         try:
-            await bot.send_message(ADMIN_ID, "🧪 Тест cron: 20:20 спрацювало!", parse_mode=ParseMode.HTML)
+            await bot.send_message(ADMIN_ID, "🧪 Тест cron: 21:20 спрацювало!", parse_mode=ParseMode.HTML)
             logger.info("✅ Тест надіслано адміну!")
         except Exception as e:
             logger.error(f"❌ Тест помилка: {e}")
@@ -185,4 +185,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
