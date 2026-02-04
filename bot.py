@@ -95,7 +95,6 @@ async def get_weather_forecast():
         )
         
         fact = resp.text.strip().replace('\n', ' ').replace('  ', ' ')
-        # Обрізаємо тільки якщо дуже довго, але зберігаємо останнє слово
         if len(fact) > 300:
             fact = fact[:297].rsplit(' ', 1)[0] + "..."
         
@@ -104,7 +103,6 @@ async def get_weather_forecast():
         
     except Exception as e:
         logger.error(f"❌ Gemini: {e}")
-        # Запасні факти якщо API недоступне
         backup_facts = [
             "Качки можуть бачити фарби ультрафіолетового спектру, недоступні людському оку.",
             "Перепілка за рік може знести до 300 яєць при вазі всього 150 грамів.",
@@ -127,6 +125,16 @@ async def daily():
     except Exception as e:
         logger.error(f"❌ Помилка: {e}")
 
+# ТЕСТОВЕ завдання на 20:10
+@aiocron.crontab('10 20 * * *', tz=pytz.timezone('Europe/Kiev'))
+async def test_cron():
+    logger.info("🧪 ТЕСТОВА РОЗСИЛКА о 20:10!")
+    try:
+        await bot.send_message(ADMIN_ID, "🧪 Тест cron: 20:10 спрацювало!", parse_mode=ParseMode.HTML)
+        logger.info("✅ Тест надіслано адміну!")
+    except Exception as e:
+        logger.error(f"❌ Тест помилка: {e}")
+
 @dp.message()
 async def manual(m: types.Message):
     if m.from_user.id != ADMIN_ID:
@@ -144,7 +152,13 @@ async def manual(m: types.Message):
 async def main():
     logger.info("🚀 БОТ ЗАПУЩЕНО")
     logger.info(f"⏰ 19:00 | 👤 {ADMIN_ID}")
+    
+    # Запускаємо cron-завдання з логуванням
+    logger.info("⏳ Запуск cron-завдань...")
     daily.start()
+    test_cron.start()
+    logger.info("✅ Cron-завдання активні!")
+    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
