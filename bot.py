@@ -147,7 +147,7 @@ async def test_task():
             target += timedelta(days=1)
         
         wait_seconds = (target - now).total_seconds()
-        logger.info(f"⏳ Тест через {wait_seconds/60:.1f} хвилин (о 20:20)")
+        logger.info(f"⏳ Тест через {wait_seconds/60:.1f} хвилин (о 21:00)")
         
         await asyncio.sleep(wait_seconds)
         
@@ -185,3 +185,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
