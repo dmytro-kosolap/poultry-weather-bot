@@ -8,6 +8,7 @@ from google import genai
 import logging
 import os
 from dotenv import load_dotenv
+import json
 
 load_dotenv()
 
@@ -44,13 +45,31 @@ ICONS = {
     "злива": "🌦", "гроза": "⛈"
 }
 
+# Файл для зберігання історії фактів
+FACTS_FILE = "used_facts.json"
+CATEGORIES = ["бройлери", "качки", "індики", "перепілки", "гуси"]
+
+def load_facts_history():
+    """Завантажує історію використаних фактів"""
+    try:
+        with open(FACTS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except:
+        return {"facts": [], "last_category": None}
+
+def save_facts_history(history):
+    """Зберігає історію фактів"""
+    with open(FACTS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(history, f, ensure_ascii=False, indent=2)
+
 async def get_weather_forecast():
     cities = [
         {"reg": "Центр", "name": "Київ", "eng": "Kyiv"},
         {"reg": "Південь", "name": "Одеса", "eng": "Odesa"},
         {"reg": "Захід", "name": "Львів", "eng": "Lviv"},
         {"reg": "Схід", "name": "Харків", "eng": "Kharkiv"},
-        {"reg": "Північ", "name": "Чернігів", "eng": "Chernihiv"}
+        {"reg": "Північ", "name": "Чернігів", "eng": "Chernihiv"},
+        {"reg": "Центр-Схід", "name": "Дніпро", "eng": "Dnipro"}
     ]
     
     tomorrow = datetime.now() + timedelta(days=1)
@@ -85,9 +104,25 @@ async def get_weather_forecast():
                 logger.error(f"Помилка {c['name']}: {e}")
                 report += f"❌ <code>{c['name'].ljust(17)} помилка</code>\n"
 
-    # Цікавий факт про птахівництво
+    # Цікавий факт про птахівництво з системою уникнення повторів
     try:
-        prompt = "Розкажи один цікавий факт про бройлерів, качок, індиків, перепілок або гусей (обери одне). 1-2 речення, максимально коротко і цікаво. Без форматування, без лапок. Повторів бути не повинно!!!Кожний раз новий цікавий факт"
+        history = load_facts_history()
+        
+        # Вибираємо категорію, яка не була останньою
+        available = [c for c in CATEGORIES if c != history.get("last_category")]
+        category = available[len(history["facts"]) % len(available)]
+        
+        # Формуємо список останніх 15 фактів для уникнення повторів
+        recent_facts = "\n".join(f"- {f}" for f in history["facts"][-15:]) if history["facts"] else "Це перший факт"
+        
+        prompt = f"""Розкажи один унікальний цікавий факт про {category}.
+1-2 речення, максимально коротко і цікаво.
+Без форматування, без лапок, без зайвих символів.
+
+ЗАБОРОНЕНО повторювати ці факти:
+{recent_facts}
+
+Факт має бути ЗОВСІМ НОВИМ, несподіваним і корисним для птахівників!"""
         
         resp = client.models.generate_content(
             model="gemini-2.0-flash-lite",
@@ -95,11 +130,24 @@ async def get_weather_forecast():
         )
         
         fact = resp.text.strip().replace('\n', ' ').replace('  ', ' ')
+        # Видаляємо можливі лапки на початку/кінці
+        fact = fact.strip('"').strip("'").strip()
+        
         if len(fact) > 300:
             fact = fact[:297].rsplit(' ', 1)[0] + "..."
         
+        # Оновлюємо історію
+        history["facts"].append(fact)
+        history["last_category"] = category
+        
+        # Зберігаємо тільки останні 100 фактів
+        if len(history["facts"]) > 100:
+            history["facts"] = history["facts"][-100:]
+        
+        save_facts_history(history)
+        
         advice = f"\n\n🐔 <b>ЦІКАВИЙ ФАКТ:</b> {fact}"
-        logger.info(f"✅ Факт: {len(fact)} симв.")
+        logger.info(f"✅ Факт ({category}): {len(fact)} симв. | Всього в історії: {len(history['facts'])}")
         
     except Exception as e:
         logger.error(f"❌ Gemini: {e}")
@@ -154,6 +202,7 @@ async def manual(m: types.Message):
 async def main():
     logger.info("🚀 БОТ ЗАПУЩЕНО")
     logger.info(f"⏰ 19:00 | 👤 {ADMIN_ID}")
+    logger.info(f"📝 Файл історії фактів: {FACTS_FILE}")
     
     # Запускаємо фонові задачі
     asyncio.create_task(daily_task())
@@ -163,4 +212,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
