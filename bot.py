@@ -161,6 +161,15 @@ async def get_weather_forecast():
         import random
         advice = f"\n\n🐔 <b>ЦІКАВИЙ ФАКТ:</b> {random.choice(backup_facts)}"
 
+
+    # --- ЗЕРНОВИЙ РИНОК ---
+    try:
+        from grain_context import get_grain_context
+        grain_info = await get_grain_context()
+        advice += f"\n\n{grain_info}"
+    except Exception as e:
+        logger.warning(f"Grain context failed: {e}")
+    # ---------------------
     return report + advice + "\n\n<b>Вдалого господарювання! 🐔</b>"
 
 async def daily_task():
