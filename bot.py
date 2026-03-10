@@ -40,17 +40,19 @@ ADMIN_ID = 708323174
 CHAT_ID = -1001761937362
 
 ICONS = {
-    "ясно": "☀️", "хмарно": "☁️", "хмарність": "⛅",
-    "дощ": "🌧", "сніг": "❄️", "туман": "🌫",
-    "злива": "🌦", "гроза": "⛈"
+    "ясно": "☀️", "ясне": "☀️", "сонячно": "☀️",
+    "хмарно": "☁️", "хмарність": "⛅", "мінлива": "⛅",
+    "дощ": "🌧️", "невеликий дощ": "🌦️", "помірний дощ": "🌧️",
+    "злива": "🌦️", "сильний дощ": "🌧️",
+    "сніг": "❄️", "невеликий сніг": "🌨️", "снігопад": "❄️",
+    "туман": "🌫️", "серпанок": "🌫️",
+    "гроза": "⛈️", "шторм": "⛈️"
 }
 
-# Файл для зберігання історії фактів
 FACTS_FILE = "used_facts.json"
 CATEGORIES = ["бройлери", "качки", "індики", "перепілки", "гуси"]
 
 def load_facts_history():
-    """Завантажує історію використаних фактів"""
     try:
         with open(FACTS_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -58,7 +60,6 @@ def load_facts_history():
         return {"facts": [], "last_category": None}
 
 def save_facts_history(history):
-    """Зберігає історію фактів"""
     with open(FACTS_FILE, 'w', encoding='utf-8') as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
 
@@ -71,11 +72,11 @@ async def get_weather_forecast():
         {"reg": "Північ", "name": "Чернігів", "eng": "Chernihiv"},
         {"reg": "Центр-Схід", "name": "Дніпро", "eng": "Dnipro"}
     ]
-    
+
     tomorrow = datetime.now() + timedelta(days=1)
     date_str = tomorrow.strftime("%d-%m-%Y")
     iso_date = tomorrow.strftime("%Y-%m-%d")
-    
+
     report = f"📅 <b>ПОГОДА НА ЗАВТРА ({date_str})</b>\n\n"
     report += "<code>Регіон (Місто)      День | Ніч</code>\n"
 
@@ -90,13 +91,13 @@ async def get_weather_forecast():
                         if iso_date in entry['dt_txt']:
                             temps.append(entry['main']['temp'])
                             descs.append(entry['weather'][0].get('description', 'хмарно'))
-                    
+
                     if temps:
                         d, n = round(max(temps)), round(min(temps))
                         wd = descs[len(descs)//2] if descs else "хмарно"
                     else:
                         d, n, wd = 0, 0, "хмарно"
-                    
+
                     icon = next((ICONS[k] for k in ICONS if k in wd.lower()), "☁️")
                     fmt = lambda t: (f"+{t}" if t > 0 else str(t)).rjust(4)
                     report += f"{icon} <code>{(c['reg']+' ('+c['name']+')').ljust(17)} {fmt(d)}° | {fmt(n)}°</code>\n"
@@ -104,17 +105,12 @@ async def get_weather_forecast():
                 logger.error(f"Помилка {c['name']}: {e}")
                 report += f"❌ <code>{c['name'].ljust(17)} помилка</code>\n"
 
-    # Цікавий факт про птахівництво з системою уникнення повторів
     try:
         history = load_facts_history()
-        
-        # Вибираємо категорію, яка не була останньою
         available = [c for c in CATEGORIES if c != history.get("last_category")]
         category = available[len(history["facts"]) % len(available)]
-        
-        # Формуємо список останніх 15 фактів для уникнення повторів
         recent_facts = "\n".join(f"- {f}" for f in history["facts"][-15:]) if history["facts"] else "Це перший факт"
-        
+
         prompt = f"""Розкажи один унікальний цікавий факт про {category}.
 1-2 речення, максимально коротко і цікаво.
 Без форматування, без лапок, без зайвих символів.
@@ -123,32 +119,29 @@ async def get_weather_forecast():
 {recent_facts}
 
 Факт має бути ЗОВСІМ НОВИМ, несподіваним і корисним для птахівників!"""
-        
+
         resp = client.models.generate_content(
             model="gemini-2.0-flash-lite",
             contents=prompt
         )
-        
+
         fact = resp.text.strip().replace('\n', ' ').replace('  ', ' ')
-        # Видаляємо можливі лапки на початку/кінці
         fact = fact.strip('"').strip("'").strip()
-        
+
         if len(fact) > 300:
             fact = fact[:297].rsplit(' ', 1)[0] + "..."
-        
-        # Оновлюємо історію
+
         history["facts"].append(fact)
         history["last_category"] = category
-        
-        # Зберігаємо тільки останні 100 фактів
+
         if len(history["facts"]) > 100:
             history["facts"] = history["facts"][-100:]
-        
+
         save_facts_history(history)
-        
+
         advice = f"\n\n🐔 <b>ЦІКАВИЙ ФАКТ:</b> {fact}"
         logger.info(f"✅ Факт ({category}): {len(fact)} симв. | Всього в історії: {len(history['facts'])}")
-        
+
     except Exception as e:
         logger.error(f"❌ Gemini: {e}")
         backup_facts = [
@@ -161,31 +154,28 @@ async def get_weather_forecast():
         import random
         advice = f"\n\n🐔 <b>ЦІКАВИЙ ФАКТ:</b> {random.choice(backup_facts)}"
 
-
-    # --- ЗЕРНОВИЙ РИНОК ---
     try:
         from grain_context import get_grain_context
         grain_info = await get_grain_context()
         advice += f"\n\n{grain_info}"
     except Exception as e:
         logger.warning(f"Grain context failed: {e}")
-    # ---------------------
+
     return report + advice + "\n\n<b>Вдалого господарювання! 🐔</b>"
 
 async def daily_task():
-    """Розсилка о 19:00"""
     while True:
         now = datetime.now(pytz.timezone('Europe/Kiev'))
         target = now.replace(hour=19, minute=0, second=0, microsecond=0)
-        
+
         if now > target:
             target += timedelta(days=1)
-        
+
         wait_seconds = (target - now).total_seconds()
         logger.info(f"⏳ Наступна розсилка через {wait_seconds/3600:.1f} годин (о 19:00)")
-        
+
         await asyncio.sleep(wait_seconds)
-        
+
         logger.info("🕐 Розсилка о 19:00...")
         try:
             text = await get_weather_forecast()
@@ -199,7 +189,7 @@ async def manual(m: types.Message):
     if m.from_user.id != ADMIN_ID:
         logger.warning(f"❌ Спроба від {m.from_user.id}")
         return
-    
+
     logger.info(f"👤 Адмін {m.from_user.id}")
     try:
         text = await get_weather_forecast()
@@ -212,11 +202,8 @@ async def main():
     logger.info("🚀 БОТ ЗАПУЩЕНО")
     logger.info(f"⏰ 19:00 | 👤 {ADMIN_ID}")
     logger.info(f"📝 Файл історії фактів: {FACTS_FILE}")
-    
-    # Запускаємо фонові задачі
     asyncio.create_task(daily_task())
     logger.info("✅ Фонові задачі активні!")
-    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
