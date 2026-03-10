@@ -4,9 +4,8 @@ import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
-# Коефіцієнти конвертації бушель -> тонна
-WHEAT_BUSHELS_PER_TON = 36.74  # 1т пшениці = 36.74 бушелі
-CORN_BUSHELS_PER_TON = 39.37   # 1т кукурудзи = 39.37 бушелі
+WHEAT_BUSHELS_PER_TON = 36.74
+CORN_BUSHELS_PER_TON = 39.37
 
 async def get_nbu_rates(session):
     rates = {}
@@ -26,7 +25,7 @@ def get_grain_prices():
     results = []
     try:
         wheat = yf.Ticker("ZW=F")
-        wh = wheat.history(period="2d")
+        wh = wheat.history(period="5d")
         if len(wh) >= 2:
             price_now = wh["Close"].iloc[-1]
             price_prev = wh["Close"].iloc[-2]
@@ -42,7 +41,7 @@ def get_grain_prices():
 
     try:
         corn = yf.Ticker("ZC=F")
-        co = corn.history(period="2d")
+        co = corn.history(period="5d")
         if len(co) >= 2:
             price_now = co["Close"].iloc[-1]
             price_prev = co["Close"].iloc[-2]
