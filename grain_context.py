@@ -42,10 +42,11 @@ def rate_change_emoji(curr, prev):
     if prev is None:
         return ""
     diff = curr - prev
+    pct = (diff / prev) * 100
     if diff > 0.01:
-        return f" 📈 +{diff:.2f}"
+        return f" 📈 +{diff:.2f} грн (+{pct:.2f}%)"
     elif diff < -0.01:
-        return f" 📉 {diff:.2f}"
+        return f" 📉 {diff:.2f} грн ({pct:.2f}%)"
     else:
         return " ➡️"
 
