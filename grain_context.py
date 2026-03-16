@@ -69,7 +69,7 @@ async def get_fuel_prices(session):
                         cols = row.find_all('td')
                         if len(cols) >= 2:
                             name = cols[0].get_text(strip=True)
-                            price_text = cols[1].get_text(strip=True).replace(',', '.')
+                            price_text = cols[2].get_text(strip=True).replace(',', '.')
                             try:
                                 price = float(price_text)
                                 if "А-95 преміум" in name:
