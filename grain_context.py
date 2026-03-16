@@ -3,12 +3,14 @@ import aiohttp
 import yfinance as yf
 import json
 import os
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
 WHEAT_BUSHELS_PER_TON = 36.74
 CORN_BUSHELS_PER_TON = 39.37
 RATES_FILE = "rates_history.json"
+FUEL_FILE = "fuel_history.json"
 
 def load_prev_rates():
     try:
@@ -24,6 +26,20 @@ def save_rates(rates):
     except Exception as e:
         logger.warning(f"Не вдалось зберегти курси: {e}")
 
+def load_prev_fuel():
+    try:
+        with open(FUEL_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_fuel(fuel):
+    try:
+        with open(FUEL_FILE, 'w') as f:
+            json.dump(fuel, f)
+    except Exception as e:
+        logger.warning(f"Не вдалось зберегти ціни палива: {e}")
+
 async def get_nbu_rates(session):
     rates = {}
     try:
@@ -38,6 +54,38 @@ async def get_nbu_rates(session):
         logger.warning(f"НБУ API недоступний: {e}")
     return rates
 
+async def get_fuel_prices(session):
+    fuel = {}
+    try:
+        url = "https://index.minfin.com.ua/ua/markets/fuel/tm/ukrnafta/"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        async with session.get(url, headers=headers, timeout=10) as response:
+            if response.status == 200:
+                text = await response.text()
+                soup = BeautifulSoup(text, 'html.parser')
+                table = soup.find('table')
+                if table:
+                    for row in table.find_all('tr'):
+                        cols = row.find_all('td')
+                        if len(cols) >= 2:
+                            name = cols[0].get_text(strip=True)
+                            price_text = cols[1].get_text(strip=True).replace(',', '.')
+                            try:
+                                price = float(price_text)
+                                if "А-95 преміум" in name:
+                                    pass
+                                elif "А-95" in name:
+                                    fuel["A95"] = price
+                                elif "А-92" in name:
+                                    fuel["A92"] = price
+                                elif "Дизельне" in name:
+                                    fuel["ДП"] = price
+                            except:
+                                pass
+    except Exception as e:
+        logger.warning(f"Помилка отримання цін палива: {e}")
+    return fuel
+
 def rate_change_emoji(curr, prev):
     if prev is None:
         return ""
@@ -47,6 +95,17 @@ def rate_change_emoji(curr, prev):
         return f" 📈 +{diff:.2f} грн (+{pct:.2f}%)"
     elif diff < -0.01:
         return f" 📉 {diff:.2f} грн ({pct:.2f}%)"
+    else:
+        return " ➡️"
+
+def fuel_change_emoji(curr, prev):
+    if prev is None:
+        return ""
+    diff = curr - prev
+    if diff > 0.01:
+        return f" 📈 +{diff:.2f} грн"
+    elif diff < -0.01:
+        return f" 📉 {diff:.2f} грн"
     else:
         return " ➡️"
 
@@ -107,12 +166,25 @@ async def get_grain_context():
                 currency_lines.append(f"🇵🇱 PLN: {pln:.2f} грн{pln_change}")
 
             currency_block = "💰 <b>Курси НБУ:</b>\n" + "\n".join(currency_lines)
-
-            # Зберігаємо поточні курси для порівняння завтра
             save_rates({"USD": usd_rate, "EUR": eur, "PLN": pln})
         else:
             usd_rate = 41.5
             currency_block = f"💰 <b>Курс (орієнтовний):</b>\n🇺🇸 USD: {usd_rate:.2f} грн"
+
+        fuel = await get_fuel_prices(session)
+        prev_fuel = load_prev_fuel()
+        if fuel:
+            fuel_lines = []
+            icons = {"A95": "🔵", "A92": "🟢", "ДП": "🟡"}
+            names = {"A95": "А-95", "A92": "А-92", "ДП": "Дизель"}
+            for key in ["A95", "A92", "ДП"]:
+                if key in fuel:
+                    change = fuel_change_emoji(fuel[key], prev_fuel.get(key))
+                    fuel_lines.append(f"{icons[key]} {names[key]}: {fuel[key]:.2f} грн{change}")
+            fuel_block = "⛽ <b>Паливо (УкрНафта):</b>\n" + "\n".join(fuel_lines)
+            save_fuel(fuel)
+        else:
+            fuel_block = "⛽ <b>Паливо:</b> дані недоступні"
 
         grain_prices = get_grain_prices()
         if grain_prices:
@@ -125,6 +197,6 @@ async def get_grain_context():
                     lines.append(f"{name}: ~${price_usd:.0f}/т  <b>{price_uah:,.0f} грн/т</b>")
             grain_block = "📊 <b>Зерно (CME, $/т):</b>\n" + "\n".join(lines)
         else:
-            grain_block = "<b>🌾 Зерновий ринок:</b>\n• <a href='https://www.cmegroup.com/markets/agriculture/grains/wheat.quotes.html'>Пшениця ZW=F</a>\n• <a href='https://www.cmegroup.com/markets/agriculture/grains/corn.kutations.html'>Кукурудза ZC=F</a>"
+            grain_block = "<b>🌾 Зерновий ринок:</b>\n• <a href='https://www.cmegroup.com/markets/agriculture/grains/wheat.quotes.html'>Пшениця ZW=F</a>\n• <a href='https://www.cmegroup.com/markets/agriculture/grains/corn.quotes.html'>Кукурудза ZC=F</a>"
 
-        return currency_block + "\n\n" + grain_block
+        return currency_block + "\n\n" + fuel_block + "\n\n" + grain_block
