@@ -80,6 +80,8 @@ async def get_fuel_prices(session):
                                     fuel["A92"] = price
                                 elif "Дизельне" in name:
                                     fuel["ДП"] = price
+                                elif "Газ" in name:
+                                    fuel["ГАЗ"] = price
                             except:
                                 pass
     except Exception as e:
@@ -175,9 +177,9 @@ async def get_grain_context():
         prev_fuel = load_prev_fuel()
         if fuel:
             fuel_lines = []
-            icons = {"A95": "🔵", "A92": "🟢", "ДП": "🟡"}
-            names = {"A95": "А-95", "A92": "А-92", "ДП": "Дизель"}
-            for key in ["A95", "A92", "ДП"]:
+            icons = {"A95": "🔵", "A92": "🟢", "ДП": "🟡", "ГАЗ": "🟠"}
+            names = {"A95": "А-95", "A92": "А-92", "ДП": "Дизель", "ГАЗ": "Автогаз"}
+            for key in ["A95", "A92", "ДП", "ГАЗ"]:
                 if key in fuel:
                     change = fuel_change_emoji(fuel[key], prev_fuel.get(key))
                     fuel_lines.append(f"{icons[key]} {names[key]}: {fuel[key]:.2f} грн{change}")
