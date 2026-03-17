@@ -8,7 +8,6 @@ from google import genai
 import logging
 import os
 from dotenv import load_dotenv
-import json
 
 load_dotenv()
 
@@ -52,19 +51,6 @@ ICONS = {
     "гроза": "⛈️", "шторм": "⛈️", "гроза з дощем": "⛈️"
 }
 
-FACTS_FILE = "used_facts.json"
-CATEGORIES = ["бройлери", "качки", "індики", "перепілки", "гуси"]
-
-def load_facts_history():
-    try:
-        with open(FACTS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except:
-        return {"facts": [], "last_category": None}
-
-def save_facts_history(history):
-    with open(FACTS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(history, f, ensure_ascii=False, indent=2)
 
 async def get_weather_forecast():
     cities = [
@@ -77,11 +63,14 @@ async def get_weather_forecast():
     ]
 
     tomorrow = datetime.now() + timedelta(days=1)
-    date_str = tomorrow.strftime("%d-%m-%Y")
+    date_str = tomorrow.strftime("%d.%m.%Y")
     iso_date = tomorrow.strftime("%Y-%m-%d")
 
-    report = f"📅 <b>ПОГОДА НА ЗАВТРА ({date_str})</b>\n\n"
+    report = f"🐔 <b>Інформаційний дайджест Птахівника</b>\n📅 <b>{date_str}</b>\n\n"
+    report += "☁️ <b>ПОГОДА НА ЗАВТРА:</b>\n"
     report += "<code>Регіон (Місто)      День | Ніч</code>\n"
+
+    weather_lines_for_prompt = []
 
     async with aiohttp.ClientSession() as session:
         for c in cities:
@@ -104,67 +93,114 @@ async def get_weather_forecast():
                     icon = next((ICONS[k] for k in ICONS if k in wd.lower()), "☁️")
                     fmt = lambda t: (f"+{t}" if t > 0 else str(t)).rjust(4)
                     report += f"{icon} <code>{(c['reg']+' ('+c['name']+')').ljust(17)} {fmt(d)}° | {fmt(n)}°</code>\n"
+                    weather_lines_for_prompt.append(
+                        f"{c['reg']} ({c['name']}): день {d}°C, ніч {n}°C, {wd}"
+                    )
             except Exception as e:
                 logger.error(f"Помилка {c['name']}: {e}")
                 report += f"❌ <code>{c['name'].ljust(17)} помилка</code>\n"
 
+    # --- Отримуємо grain context і дані для Gemini ---
+    grain_info = ""
+    grain_data_for_prompt = ""
+
     try:
-        history = load_facts_history()
-        available = [c for c in CATEGORIES if c != history.get("last_category")]
-        category = available[len(history["facts"]) % len(available)]
-        recent_facts = "\n".join(f"- {f}" for f in history["facts"][-15:]) if history["facts"] else "Це перший факт"
+        from grain_context import get_grain_context, get_nbu_rates, get_fuel_prices, get_grain_prices
 
-        prompt = f"""Розкажи один унікальний цікавий факт про {category}.
-1-2 речення, максимально коротко і цікаво.
-Без форматування, без лапок, без зайвих символів.
+        async with aiohttp.ClientSession() as session:
+            rates = await get_nbu_rates(session)
+            fuel = await get_fuel_prices(session)
+        grain_prices = get_grain_prices()
 
-ЗАБОРОНЕНО повторювати ці факти:
-{recent_facts}
+        usd = rates.get("USD", 41.5)
+        eur = rates.get("EUR", 0)
+        pln = rates.get("PLN", 0)
 
-Факт має бути ЗОВСІМ НОВИМ, несподіваним і корисним для птахівників!"""
+        wheat_line = next(
+            (f"~${p:.0f}/т (~{p*usd:,.0f} грн/т), динаміка {ch:+.1f}%"
+             for n, p, ch, _ in grain_prices if "Пшениця" in n and ch is not None),
+            "немає даних"
+        )
+        corn_line = next(
+            (f"~${p:.0f}/т (~{p*usd:,.0f} грн/т), динаміка {ch:+.1f}%"
+             for n, p, ch, _ in grain_prices if "Кукурудза" in n and ch is not None),
+            "немає даних"
+        )
+
+        fuel_a95 = fuel.get("A95", "–")
+        fuel_dp = fuel.get("ДП", "–")
+
+        weather_summary = "\n".join(weather_lines_for_prompt) if weather_lines_for_prompt else "дані відсутні"
+
+        grain_data_for_prompt = f"""Погода на завтра по регіонах України:
+{weather_summary}
+
+Курси НБУ: USD={usd:.2f} грн, EUR={eur:.2f} грн, PLN={pln:.2f} грн
+
+Ціни на зерно (CME):
+- Пшениця: {wheat_line}
+- Кукурудза: {corn_line}
+
+Ціни на паливо (УкрНафта):
+- А-95: {fuel_a95} грн/л
+- Дизель: {fuel_dp} грн/л"""
+
+        grain_info = await get_grain_context()
+        logger.info("✅ Grain context отримано")
+
+    except Exception as e:
+        logger.warning(f"Grain context failed: {e}")
+
+    # --- Gemini: порада птахівнику ---
+    advice = ""
+    try:
+        prompt = f"""Ти — досвідчений консультант з птахівництва в Україні.
+На основі актуальних даних дай ОДНУ конкретну практичну пораду птахівнику на завтра.
+
+{grain_data_for_prompt}
+
+Вимоги до поради:
+- 2-3 речення, чітко і по справі
+- Враховуй реальні дані (погода, курс, ціни на корм/паливо)
+- Практична дія: що САМЕ зробити завтра
+- Без зайвих слів, без вступу типу "Рекомендую" або "Порада:"
+- Тільки текст, без форматування і символів"""
 
         resp = client.models.generate_content(
             model="gemini-2.0-flash-lite",
             contents=prompt
         )
 
-        fact = resp.text.strip().replace('\n', ' ').replace('  ', ' ')
-        fact = fact.strip('"').strip("'").strip()
+        advice_text = resp.text.strip().replace('\n', ' ').replace('  ', ' ')
+        advice_text = advice_text.strip('"').strip("'").strip()
 
-        if len(fact) > 300:
-            fact = fact[:297].rsplit(' ', 1)[0] + "..."
+        if len(advice_text) > 400:
+            advice_text = advice_text[:397].rsplit(' ', 1)[0] + "..."
 
-        history["facts"].append(fact)
-        history["last_category"] = category
-
-        if len(history["facts"]) > 100:
-            history["facts"] = history["facts"][-100:]
-
-        save_facts_history(history)
-
-        advice = f"\n\n🐔 <b>ЦІКАВИЙ ФАКТ:</b> {fact}"
-        logger.info(f"✅ Факт ({category}): {len(fact)} симв. | Всього в історії: {len(history['facts'])}")
+        logger.info(f"✅ Порада Gemini: {len(advice_text)} симв.")
+        advice = f"\n\n💡 <b>ПОРАДА НА ЗАВТРА:</b> {advice_text}"
 
     except Exception as e:
         logger.error(f"❌ Gemini: {e}")
-        backup_facts = [
-            "Качки можуть бачити фарби ультрафіолетового спектру, недоступні людському оку.",
-            "Перепілка за рік може знести до 300 яєць при вазі всього 150 грамів.",
-            "Індики здатні розпізнавати своїх родичів серед сотні птахів.",
-            "Гуси були одомашнені раніше за курей — близько 3000 років до н.е.",
-            "Бройлер набирає 2 кг ваги всього за 35-40 днів вирощування."
-        ]
         import random
-        advice = f"\n\n🐔 <b>ЦІКАВИЙ ФАКТ:</b> {random.choice(backup_facts)}"
+        backup = [
+            "Перевірте температуру і вентиляцію в пташнику — різкі перепади погоди впливають на імунітет птиці.",
+            "Проконтролюйте залишки корму: при зміні цін на зерно варто скоригувати рецептуру раціону.",
+            "Огляньте поголів'я на наявність стресових ознак — зміна погоди може спровокувати зниження несучості.",
+            "Перевірте запаси ліків і вітамінів — своєчасна профілактика дешевша за лікування.",
+            "Зверніть увагу на споживання води птицею: в холодну погоду потреба у воді зростає."
+        ]
+        advice = f"\n\n💡 <b>ПОРАДА НА ЗАВТРА:</b> {random.choice(backup)}"
 
-    try:
-        from grain_context import get_grain_context
-        grain_info = await get_grain_context()
-        advice += f"\n\n{grain_info}"
-    except Exception as e:
-        logger.warning(f"Grain context failed: {e}")
+    # --- Збираємо фінальне повідомлення ---
+    result = report
+    if grain_info:
+        result += f"\n{grain_info}"
+    result += advice
+    result += "\n\n<b>Вдалого господарювання! 🐔</b>"
 
-    return report + advice + "\n\n<b>Вдалого господарювання! 🐔</b>"
+    return result
+
 
 async def daily_task():
     while True:
@@ -187,6 +223,7 @@ async def daily_task():
         except Exception as e:
             logger.error(f"❌ Помилка: {e}")
 
+
 @dp.message()
 async def manual(m: types.Message):
     if m.from_user.id != ADMIN_ID:
@@ -201,13 +238,14 @@ async def manual(m: types.Message):
         logger.error(f"❌ Помилка: {e}")
         await m.answer("❌ Помилка")
 
+
 async def main():
     logger.info("🚀 БОТ ЗАПУЩЕНО")
     logger.info(f"⏰ 19:00 | 👤 {ADMIN_ID}")
-    logger.info(f"📝 Файл історії фактів: {FACTS_FILE}")
     asyncio.create_task(daily_task())
     logger.info("✅ Фонові задачі активні!")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
