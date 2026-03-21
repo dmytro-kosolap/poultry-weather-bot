@@ -22,45 +22,45 @@ RSS_FEEDS = [
     },
     {
         "label": "Світові тренди галузі",
-        "url": "https://news.google.com/rss/search?q=poultry+industry+trends&hl=uk&gl=UA&ceid=UA:uk"
+        "url": "https://news.google.com/rss/search?q=poultry+industry+world+2026&hl=en&gl=US&ceid=US:en"
     },
     {
         "label": "Законодавство та держпідтримка",
-        "url": "https://news.google.com/rss/search?q=птахівництво+закон+субсидія+держпідтримка+Україна&hl=uk&gl=UA&ceid=UA:uk"
+        "url": "https://news.google.com/rss/search?q=агросектор+субсидія+закон+держпідтримка+Україна+2026&hl=uk&gl=UA&ceid=UA:uk"
     },
     {
         "label": "Хвороби та спалахи",
-        "url": "https://news.google.com/rss/search?q=пташиний+грип+хвороба+птиці+спалах&hl=uk&gl=UA&ceid=UA:uk"
+        "url": "https://news.google.com/rss/search?q=пташиний+грип+спалах+птиця+2026&hl=uk&gl=UA&ceid=UA:uk"
     },
 ]
 
-MAX_NEWS_PER_TOPIC = 5  # скільки новин беремо з кожного RSS
+MAX_NEWS_PER_TOPIC = 5
 
 
 async def fetch_rss(session, feed):
-    """Завантажує RSS і повертає список заголовків + посилань"""
+    """Завантажує RSS і повертає список заголовків"""
     items = []
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         async with session.get(feed["url"], headers=headers, timeout=15) as resp:
             if resp.status == 200:
                 text = await resp.text()
-                # Простий парсинг XML без бібліотек
                 import re
-                titles = re.findall(r'<title><!\[CDATA\[(.*?)\]\]></title>', text)
-                links = re.findall(r'<link>(https?://[^<]+)</link>', text)
 
-                # Якщо CDATA не знайдено — спробуємо без нього
+                # Спробуємо CDATA формат
+                titles = re.findall(r'<title><!\[CDATA\[(.*?)\]\]></title>', text)
+
+                # Якщо не знайшло — звичайний формат
                 if not titles:
                     titles = re.findall(r'<title>(.*?)</title>', text)
-                    # Пропускаємо перший — це назва каналу
-                    titles = titles[1:]
+                    titles = titles[1:]  # пропускаємо назву каналу
 
-                for i, title in enumerate(titles[:MAX_NEWS_PER_TOPIC]):
-                    link = links[i] if i < len(links) else ""
-                    # Прибираємо назву джерела після " - "
+                for title in titles[:MAX_NEWS_PER_TOPIC]:
                     clean_title = title.split(' - ')[0].strip()
-                    items.append({"title": clean_title, "link": link})
+                    # Декодуємо HTML entities
+                    clean_title = clean_title.replace('&amp;', '&').replace('&quot;', '"').replace('&#39;', "'")
+                    if clean_title:
+                        items.append(clean_title)
 
                 logger.info(f"✅ RSS '{feed['label']}': {len(items)} новин")
     except Exception as e:
@@ -71,33 +71,32 @@ async def fetch_rss(session, feed):
 async def generate_digest_with_gemini(news_by_topic):
     """Передає новини в Gemini і отримує структурований дайджест"""
     try:
-        # Формуємо блок новин для промпту
         news_text = ""
         for topic, items in news_by_topic.items():
             if items:
                 news_text += f"\n### {topic}:\n"
                 for item in items:
-                    news_text += f"- {item['title']}\n"
+                    news_text += f"- {item}\n"
 
         if not news_text.strip():
             return None
 
-        prompt = f"""Ти — експерт з птахівництва в Україні. 
+        prompt = f"""Ти — експерт з птахівництва в Україні.
 Проаналізуй ці новини за тиждень і склади короткий дайджест українською мовою.
 
 {news_text}
 
 Вимоги:
 - Для кожного розділу напиши 2-4 речення — головне, що варто знати птахівнику
-- Якщо новин по темі немає або вони нерелевантні — пропусти розділ
+- Якщо новин по темі немає або вони нерелевантні — так і напиши: "Без суттєвих новин цього тижня."
 - Виділи найважливіше для практики господарства
 - Без зайвих вступів, одразу по суті
-- Без форматування (без *, без #, без markdown)
-- Кожен розділ починай з назви розділу з великої літери і двокрапки
+- Без будь-якого форматування (без *, без #, без markdown, без дефісів на початку)
+- Кожен розділ починай ЛИШЕ з назви розділу і двокрапки, наприклад: "Птахівництво України:"
 
-Розділи для аналізу:
+Розділи:
 1. Птахівництво України
-2. Світові тренди галузі  
+2. Світові тренди галузі
 3. Законодавство та держпідтримка
 4. Хвороби та спалахи"""
 
@@ -121,22 +120,19 @@ async def build_news_digest():
     week_str = now.strftime("%d.%m.%Y")
 
     async with aiohttp.ClientSession() as session:
-        # Збираємо новини по всіх темах
         news_by_topic = {}
         for feed in RSS_FEEDS:
             items = await fetch_rss(session, feed)
             news_by_topic[feed["label"]] = items
 
-    # Генеруємо огляд через Gemini
     digest_text = await generate_digest_with_gemini(news_by_topic)
 
-    # Формуємо повідомлення
+    # Заголовок
     message = f"🗞 <b>Тижневий дайджест птахівника</b>\n"
     message += f"📅 <b>{week_str}</b>\n"
-    message += "─" * 28 + "\n\n"
+    message += "―" * 14 + "\n\n"
 
     if digest_text:
-        # Розбиваємо по розділах і форматуємо
         sections = {
             "Птахівництво України": "🇺🇦",
             "Світові тренди галузі": "🌍",
@@ -151,10 +147,12 @@ async def build_news_digest():
             if not line:
                 formatted.append("")
                 continue
-            # Перевіряємо чи це заголовок розділу
             matched = False
             for section_name, emoji in sections.items():
                 if line.lower().startswith(section_name.lower()):
+                    # Додаємо порожній рядок перед розділом (крім першого)
+                    if formatted:
+                        formatted.append("")
                     formatted.append(f"{emoji} <b>{line}</b>")
                     matched = True
                     break
@@ -165,13 +163,12 @@ async def build_news_digest():
     else:
         message += "⚠️ Не вдалось отримати новини цього тижня."
 
-    # Додаємо посилання на джерела
-    message += "\n\n─" * 14 + "\n"
-    message += "📰 <b>Джерела:</b>\n"
-    message += '• <a href="https://agravery.com/uk/posts/category/show?slug=ptakhivnytstvo">Agravery</a>\n'
-    message += '• <a href="https://latifundist.com/rating/top100">Latifundist</a>\n'
-    message += '• <a href="https://news.google.com/search?q=птахівництво+Україна&hl=uk">Google News</a>'
-
+    # Підвал з джерелами
+    message += "\n\n" + "―" * 14 + "\n"
+    message += "📰 <b>Джерела:</b> "
+    message += '<a href="https://agravery.com/uk/posts/category/show?slug=ptakhivnytstvo">Agravery</a> • '
+    message += '<a href="https://latifundist.com">Latifundist</a> • '
+    message += '<a href="https://news.google.com/search?q=птахівництво+Україна&hl=uk">Google News</a>'
     message += "\n\n<b>Гарного тижня! 🐔</b>"
 
     logger.info(f"✅ Дайджест новин сформовано: {len(message)} симв.")
