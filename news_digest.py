@@ -106,6 +106,8 @@ async def generate_digest_with_gemini(news_by_topic):
         )
 
         text = resp.text.strip()
+        # Прибираємо markdown форматування яке Gemini іноді додає
+        text = text.replace('**', '')
         logger.info(f"✅ Gemini дайджест: {len(text)} симв.")
         return text
 
@@ -169,7 +171,7 @@ async def build_news_digest():
     message += '<a href="https://agravery.com/uk/posts/category/show?slug=ptakhivnytstvo">Agravery</a> • '
     message += '<a href="https://latifundist.com">Latifundist</a> • '
     message += '<a href="https://news.google.com/search?q=птахівництво+Україна&hl=uk">Google News</a>'
-    message += "\n\n<b>Гарного тижня! 🐔</b>"
+    message += "\n\n<b>Вдалих вихідних! 🐔</b>"
 
     logger.info(f"✅ Дайджест новин сформовано: {len(message)} симв.")
     return message
