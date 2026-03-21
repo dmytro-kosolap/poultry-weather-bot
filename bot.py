@@ -203,25 +203,58 @@ async def get_weather_forecast():
 
 
 async def daily_task():
+    """Щоденна розсилка о 19:00"""
     while True:
         now = datetime.now(pytz.timezone('Europe/Kiev'))
         target = now.replace(hour=19, minute=0, second=0, microsecond=0)
 
-        if now > target:
+        if now >= target:
             target += timedelta(days=1)
 
         wait_seconds = (target - now).total_seconds()
-        logger.info(f"⏳ Наступна розсилка через {wait_seconds/3600:.1f} годин (о 19:00)")
+        logger.info(f"⏳ Наступний дайджест через {wait_seconds/3600:.1f} год (о 19:00)")
 
         await asyncio.sleep(wait_seconds)
 
-        logger.info("🕐 Розсилка о 19:00...")
+        logger.info("🕐 Розсилка щоденного дайджесту о 19:00...")
         try:
             text = await get_weather_forecast()
             await bot.send_message(CHAT_ID, text, parse_mode=ParseMode.HTML)
-            logger.info("✅ Надіслано!")
+            logger.info("✅ Щоденний дайджест надіслано!")
         except Exception as e:
-            logger.error(f"❌ Помилка: {e}")
+            logger.error(f"❌ Помилка щоденного дайджесту: {e}")
+
+
+async def weekly_news_task():
+    """Щотижнева розсилка новин у п'ятницю о 9:00"""
+    while True:
+        now = datetime.now(pytz.timezone('Europe/Kiev'))
+
+        # weekday(): 0=Пн, 1=Вт, 2=Ср, 3=Чт, 4=Пт, 5=Сб, 6=Нд
+        days_until_friday = (4 - now.weekday()) % 7
+        target = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        target += timedelta(days=days_until_friday)
+
+        # Якщо сьогодні п'ятниця і вже після 9:00 — наступна п'ятниця
+        if days_until_friday == 0 and now >= target:
+            target += timedelta(days=7)
+
+        wait_seconds = (target - now).total_seconds()
+        logger.info(
+            f"📰 Наступний тижневий дайджест через {wait_seconds/3600:.1f} год "
+            f"(п'ятниця {target.strftime('%d.%m.%Y')} о 09:00)"
+        )
+
+        await asyncio.sleep(wait_seconds)
+
+        logger.info("📰 Формуємо тижневий дайджест новин...")
+        try:
+            from news_digest import build_news_digest
+            text = await build_news_digest()
+            await bot.send_message(CHAT_ID, text, parse_mode=ParseMode.HTML)
+            logger.info("✅ Тижневий дайджест новин надіслано!")
+        except Exception as e:
+            logger.error(f"❌ Помилка тижневого дайджесту: {e}")
 
 
 @dp.message()
@@ -230,7 +263,21 @@ async def manual(m: types.Message):
         logger.warning(f"❌ Спроба від {m.from_user.id}")
         return
 
-    logger.info(f"👤 Адмін {m.from_user.id}")
+    logger.info(f"👤 Адмін: '{m.text}'")
+
+    # Команда для тесту тижневого дайджесту новин
+    if m.text and m.text.strip().lower() in ["/news", "новини", "/digest"]:
+        try:
+            await m.answer("⏳ Формую тижневий дайджест новин...")
+            from news_digest import build_news_digest
+            text = await build_news_digest()
+            await m.answer(text, parse_mode=ParseMode.HTML)
+        except Exception as e:
+            logger.error(f"❌ Помилка: {e}")
+            await m.answer(f"❌ Помилка: {e}")
+        return
+
+    # Стандартний щоденний дайджест
     try:
         text = await get_weather_forecast()
         await m.answer(text, parse_mode=ParseMode.HTML)
@@ -241,8 +288,13 @@ async def manual(m: types.Message):
 
 async def main():
     logger.info("🚀 БОТ ЗАПУЩЕНО")
-    logger.info(f"⏰ 19:00 | 👤 {ADMIN_ID}")
+    logger.info(f"⏰ Щоденний дайджест: 19:00")
+    logger.info(f"📰 Тижневий дайджест новин: П'ятниця 09:00")
+    logger.info(f"👤 ADMIN_ID: {ADMIN_ID}")
+
     asyncio.create_task(daily_task())
+    asyncio.create_task(weekly_news_task())
+
     logger.info("✅ Фонові задачі активні!")
     await dp.start_polling(bot)
 
