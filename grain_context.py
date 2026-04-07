@@ -11,7 +11,9 @@ WHEAT_BUSHELS_PER_TON = 36.74
 CORN_BUSHELS_PER_TON = 39.37
 RATES_FILE = "rates_history.json"
 FUEL_FILE = "fuel_history.json"
-CHICKEN_FILE = "chicken_history.json"
+POULTRY_FILE = "poultry_history.json"
+
+# ─── Збереження/завантаження історії ───────────────────────────────────────
 
 def load_prev_rates():
     try:
@@ -41,19 +43,21 @@ def save_fuel(fuel):
     except Exception as e:
         logger.warning(f"Не вдалось зберегти ціни палива: {e}")
 
-def load_prev_chicken():
+def load_prev_poultry():
     try:
-        with open(CHICKEN_FILE, 'r') as f:
+        with open(POULTRY_FILE, 'r') as f:
             return json.load(f)
     except:
         return {}
 
-def save_chicken(data):
+def save_poultry(data):
     try:
-        with open(CHICKEN_FILE, 'w') as f:
+        with open(POULTRY_FILE, 'w') as f:
             json.dump(data, f)
     except Exception as e:
-        logger.warning(f"Не вдалось зберегти ціни курятини: {e}")
+        logger.warning(f"Не вдалось зберегти ціни птиці/яєць: {e}")
+
+# ─── НБУ ───────────────────────────────────────────────────────────────────
 
 async def get_nbu_rates(session):
     rates = {}
@@ -69,6 +73,8 @@ async def get_nbu_rates(session):
         logger.warning(f"НБУ API недоступний: {e}")
     return rates
 
+# ─── Паливо ────────────────────────────────────────────────────────────────
+
 async def get_fuel_prices(session):
     fuel = {}
     try:
@@ -82,7 +88,7 @@ async def get_fuel_prices(session):
                 if table:
                     for row in table.find_all('tr'):
                         cols = row.find_all('td')
-                        if len(cols) >= 2:
+                        if len(cols) >= 3:
                             name = cols[0].get_text(strip=True)
                             price_text = cols[2].get_text(strip=True).replace(',', '.')
                             try:
@@ -103,64 +109,202 @@ async def get_fuel_prices(session):
         logger.warning(f"Помилка отримання цін палива: {e}")
     return fuel
 
-async def get_chicken_fillet_price(session):
+# ─── Ціни на птицю і яйця через АТБ ───────────────────────────────────────
+
+async def _search_atb(session: aiohttp.ClientSession, query: str, max_pages: int = 3) -> list[dict]:
     """
-    Парсить середню ціну на куряче філе з minfin.
-    Використовує сторінку з щоденним моніторингом по супермаркетах.
+    Шукає товари через АТБ API і повертає список {name, price}.
+    АТБ не блокує запити — відкритий каталог.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.atbmarket.com/",
+    }
+    results = []
+    for page in range(1, max_pages + 1):
+        url = (
+            f"https://www.atbmarket.com/api/catalog/products"
+            f"?search={query}&page={page}&limit=20"
+        )
+        try:
+            async with session.get(url, headers=headers, timeout=10) as resp:
+                if resp.status != 200:
+                    break
+                data = await resp.json(content_type=None)
+                # АТБ повертає {"items": [...]} або {"data": {"items": [...]}}
+                items = (
+                    data.get("items") or
+                    data.get("data", {}).get("items") or
+                    []
+                )
+                if not items:
+                    break
+                for item in items:
+                    name = item.get("title") or item.get("name") or ""
+                    price = item.get("price") or item.get("current_price") or 0
+                    try:
+                        price = float(str(price).replace(",", ".").replace(" ", ""))
+                    except:
+                        continue
+                    if price > 0:
+                        results.append({"name": name, "price": price})
+        except Exception as e:
+            logger.warning(f"АТБ пошук '{query}' стор.{page}: {e}")
+            break
+    return results
+
+
+def _avg_price(items: list[dict], keywords: list[str], exclude: list[str],
+               min_p: float, max_p: float) -> float | None:
+    """
+    Фільтрує товари за ключовими словами і повертає середню ціну.
+    keywords — всі мають бути в назві (AND).
+    exclude  — жоден не має бути в назві.
+    """
+    prices = []
+    for item in items:
+        name_lower = item["name"].lower()
+        if all(kw in name_lower for kw in keywords) and \
+           not any(ex in name_lower for ex in exclude):
+            p = item["price"]
+            if min_p <= p <= max_p:
+                prices.append(p)
+                logger.debug(f"  → '{item['name']}': {p} грн")
+    if not prices:
+        return None
+    return round(sum(prices) / len(prices), 2)
+
+
+async def get_poultry_prices(session: aiohttp.ClientSession) -> dict:
+    """
+    Повертає словник:
+      chicken_fillet  — куряче філе, грн/кг
+      turkey_fillet   — філе індички, грн/кг
+      eggs_10         — яйця С1/С0 10 шт, грн/упак
+    Джерело: АТБ (щоденні реальні ціни магазину).
     """
     result = {}
+
+    # ── 1. Куряче філе ──────────────────────────────────────────────
+    items_chicken = await _search_atb(session, "філе куряче")
+    price = _avg_price(
+        items_chicken,
+        keywords=["філе", "кур"],
+        exclude=["індич", "качин", "качк", "перепел", "рулет", "котлет",
+                 "фарш", "марин", "копч", "заморож"],
+        min_p=60, max_p=350
+    )
+    if price:
+        result["chicken_fillet"] = price
+        logger.info(f"✅ Куряче філе (АТБ): {price} грн/кг")
+    else:
+        logger.warning("⚠️ Куряче філе (АТБ): не знайдено")
+
+    # ── 2. Філе індички ─────────────────────────────────────────────
+    items_turkey = await _search_atb(session, "філе індичка")
+    price_t = _avg_price(
+        items_turkey,
+        keywords=["філе", "індич"],
+        exclude=["фарш", "рулет", "котлет", "марин", "копч", "заморож"],
+        min_p=80, max_p=500
+    )
+    if price_t:
+        result["turkey_fillet"] = price_t
+        logger.info(f"✅ Філе індички (АТБ): {price_t} грн/кг")
+    else:
+        logger.warning("⚠️ Філе індички (АТБ): не знайдено")
+
+    # ── 3. Яйця (10 шт) ────────────────────────────────────────────
+    items_eggs = await _search_atb(session, "яйця курячі 10")
+    price_e = _avg_price(
+        items_eggs,
+        keywords=["яйц"],
+        exclude=["перепел", "шоколад", "паска", "декор"],
+        min_p=30, max_p=200
+    )
+    if price_e:
+        result["eggs_10"] = price_e
+        logger.info(f"✅ Яйця 10 шт (АТБ): {price_e} грн")
+    else:
+        logger.warning("⚠️ Яйця 10 шт (АТБ): не знайдено")
+
+    # ── Fallback: Minfin якщо АТБ не дав результатів ───────────────
+    if not result:
+        logger.info("🔄 АТБ не відповів — пробуємо Minfin як fallback...")
+        result = await _get_poultry_minfin_fallback(session)
+
+    return result
+
+
+async def _get_poultry_minfin_fallback(session: aiohttp.ClientSession) -> dict:
+    """
+    Резервний варіант — Minfin щоденний моніторинг по супермаркетах.
+    Дані там оновлюються частіше ніж загальна статистика.
+    """
+    result = {}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+
+    # Куряче філе
     try:
         url = "https://index.minfin.com.ua/ua/markets/wares/prods/meat-food/meat/chicken/"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
-        async with session.get(url, headers=headers, timeout=10) as response:
-            if response.status == 200:
-                text = await response.text()
-                soup = BeautifulSoup(text, 'html.parser')
-
-                # Шукаємо рядки таблиці з філе
+        async with session.get(url, headers=headers, timeout=10) as resp:
+            if resp.status == 200:
+                soup = BeautifulSoup(await resp.text(), 'html.parser')
+                prices = []
                 for row in soup.find_all('tr'):
                     cols = row.find_all('td')
                     if len(cols) >= 2:
                         name = cols[0].get_text(strip=True).lower()
-                        if 'філе' in name:
-                            # Шукаємо ціну — остання колонка з числом
-                            for col in reversed(cols):
-                                price_text = col.get_text(strip=True).replace(',', '.').replace('\xa0', '').replace(' ', '')
+                        if 'філе' in name and 'індич' not in name:
+                            # Перебираємо всі колонки з ціною (можуть бути по магазинах)
+                            for col in cols[1:]:
+                                val = col.get_text(strip=True).replace(',', '.') \
+                                         .replace('\xa0', '').replace(' ', '')
                                 try:
-                                    price = float(price_text)
-                                    if 50 < price < 500:  # розумний діапазон грн/кг
-                                        result["fillet"] = price
-                                        logger.info(f"✅ Куряче філе: {price} грн/кг (рядок: {cols[0].get_text(strip=True)})")
-                                        break
+                                    p = float(val)
+                                    if 60 < p < 350:
+                                        prices.append(p)
                                 except:
-                                    continue
-                        if result:
-                            break
-
-                # Якщо не знайшли через таблицю — шукаємо через product-prices
-                if not result:
-                    url2 = "https://index.minfin.com.ua/ua/markets/product-prices/chicken_fillet/"
-                    async with session.get(url2, headers=headers, timeout=10) as r2:
-                        if r2.status == 200:
-                            text2 = await r2.text()
-                            soup2 = BeautifulSoup(text2, 'html.parser')
-                            # Шукаємо останнє значення ціни на сторінці
-                            for tag in soup2.find_all(['td', 'span', 'div']):
-                                text_val = tag.get_text(strip=True).replace(',', '.').replace('\xa0', '').replace(' ', '')
-                                try:
-                                    price = float(text_val)
-                                    if 50 < price < 500:
-                                        result["fillet"] = price
-                                        logger.info(f"✅ Куряче філе (fallback): {price} грн/кг")
-                                        break
-                                except:
-                                    continue
-
+                                    pass
+                if prices:
+                    result["chicken_fillet"] = round(sum(prices) / len(prices), 2)
+                    logger.info(f"✅ Куряче філе (Minfin fallback): {result['chicken_fillet']} грн/кг")
     except Exception as e:
-        logger.warning(f"Помилка отримання ціни курятини: {e}")
+        logger.warning(f"Minfin куряче філе: {e}")
+
+    # Яйця
+    try:
+        url = "https://index.minfin.com.ua/ua/markets/wares/prods/eggs/eggs/chicken/"
+        async with session.get(url, headers=headers, timeout=10) as resp:
+            if resp.status == 200:
+                soup = BeautifulSoup(await resp.text(), 'html.parser')
+                prices = []
+                for row in soup.find_all('tr'):
+                    cols = row.find_all('td')
+                    if len(cols) >= 2:
+                        name = cols[0].get_text(strip=True).lower()
+                        if 'яйц' in name and '10' in name:
+                            for col in cols[1:]:
+                                val = col.get_text(strip=True).replace(',', '.') \
+                                         .replace('\xa0', '').replace(' ', '')
+                                try:
+                                    p = float(val)
+                                    if 25 < p < 200:
+                                        prices.append(p)
+                                except:
+                                    pass
+                if prices:
+                    result["eggs_10"] = round(sum(prices) / len(prices), 2)
+                    logger.info(f"✅ Яйця 10 шт (Minfin fallback): {result['eggs_10']} грн")
+    except Exception as e:
+        logger.warning(f"Minfin яйця: {e}")
+
     return result
+
+# ─── Зміни ціни (emoji) ────────────────────────────────────────────────────
 
 def rate_change_emoji(curr, prev):
     if prev is None:
@@ -185,16 +329,19 @@ def fuel_change_emoji(curr, prev):
     else:
         return " ➡️"
 
-def chicken_change_emoji(curr, prev):
+def price_change_emoji(curr, prev, threshold=0.05):
+    """Універсальна функція зміни ціни для м'яса та яєць."""
     if prev is None:
         return ""
     diff = curr - prev
-    if diff > 0.05:
+    if diff > threshold:
         return f" 📈 +{diff:.2f} грн"
-    elif diff < -0.05:
+    elif diff < -threshold:
         return f" 📉 {diff:.2f} грн"
     else:
         return " ➡️"
+
+# ─── Зерно (CME) ───────────────────────────────────────────────────────────
 
 def get_grain_prices():
     results = []
@@ -231,6 +378,8 @@ def get_grain_prices():
         logger.error(f"Помилка отримання кукурудзи: {e}")
 
     return results
+
+# ─── Головна функція ───────────────────────────────────────────────────────
 
 async def get_grain_context():
     async with aiohttp.ClientSession() as session:
@@ -283,28 +432,50 @@ async def get_grain_context():
             for name, price_usd, change, emoji in grain_prices:
                 price_uah = price_usd * usd_rate
                 if change is not None:
-                    lines.append(f"{name}: ~${price_usd:.0f}/т  <b>{price_uah:,.0f} грн/т</b> {emoji} {change:+.1f}%")
+                    lines.append(
+                        f"{name}: ~${price_usd:.0f}/т  "
+                        f"<b>{price_uah:,.0f} грн/т</b> {emoji} {change:+.1f}%"
+                    )
                 else:
                     lines.append(f"{name}: ~${price_usd:.0f}/т  <b>{price_uah:,.0f} грн/т</b>")
             grain_block = "📊 <b>Зерно (CME, $/т):</b>\n" + "\n".join(lines)
         else:
-            grain_block = "<b>🌾 Зерновий ринок:</b>\n• <a href='https://www.cmegroup.com/markets/agriculture/grains/wheat.quotes.html'>Пшениця ZW=F</a>\n• <a href='https://www.cmegroup.com/markets/agriculture/grains/corn.quotes.html'>Кукурудза ZC=F</a>"
+            grain_block = (
+                "<b>🌾 Зерновий ринок:</b>\n"
+                "• <a href='https://www.cmegroup.com/markets/agriculture/grains/wheat.quotes.html'>Пшениця ZW=F</a>\n"
+                "• <a href='https://www.cmegroup.com/markets/agriculture/grains/corn.quotes.html'>Кукурудза ZC=F</a>"
+            )
 
-        # --- Куряче філе ---
-        chicken = await get_chicken_fillet_price(session)
-        prev_chicken = load_prev_chicken()
-        if chicken.get("fillet"):
-            price = chicken["fillet"]
-            change = chicken_change_emoji(price, prev_chicken.get("fillet"))
-            chicken_block = f"🍗 <b>Куряче філе (середня ціна):</b>\n{price:.2f} грн/кг{change}"
-            save_chicken({"fillet": price})
+        # --- Ціни на птицю і яйця (АТБ) ---
+        poultry = await get_poultry_prices(session)
+        prev_poultry = load_prev_poultry()
+        poultry_lines = []
+
+        cf = poultry.get("chicken_fillet")
+        if cf:
+            ch = price_change_emoji(cf, prev_poultry.get("chicken_fillet"))
+            poultry_lines.append(f"🍗 Куряче філе: <b>{cf:.2f} грн/кг</b>{ch}")
+
+        tf = poultry.get("turkey_fillet")
+        if tf:
+            ch = price_change_emoji(tf, prev_poultry.get("turkey_fillet"))
+            poultry_lines.append(f"🦃 Філе індички: <b>{tf:.2f} грн/кг</b>{ch}")
+
+        eg = poultry.get("eggs_10")
+        if eg:
+            ch = price_change_emoji(eg, prev_poultry.get("eggs_10"), threshold=0.10)
+            poultry_lines.append(f"🥚 Яйця С1 (10 шт): <b>{eg:.2f} грн</b>{ch}")
+
+        if poultry_lines:
+            poultry_block = "🐔 <b>Ціни на птицю і яйця (АТБ):</b>\n" + "\n".join(poultry_lines)
+            save_poultry(poultry)
         else:
-            chicken_block = "🍗 <b>Куряче філе:</b> дані недоступні"
-            logger.warning("⚠️ Не вдалось отримати ціну курячого філе")
+            poultry_block = "🐔 <b>Ціни на птицю і яйця:</b> дані недоступні"
+            logger.warning("⚠️ Не вдалось отримати ціни на птицю/яйця")
 
         return (
             currency_block + "\n\n" +
             fuel_block + "\n\n" +
             grain_block + "\n\n" +
-            chicken_block
+            poultry_block
         )
