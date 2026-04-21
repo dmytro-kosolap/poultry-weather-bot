@@ -59,16 +59,19 @@ async def get_weather_forecast():
         {"reg": "Захід", "name": "Львів", "eng": "Lviv"},
         {"reg": "Схід", "name": "Харків", "eng": "Kharkiv"},
         {"reg": "Північ", "name": "Чернігів", "eng": "Chernihiv"},
-        {"reg": "Центр-Схід", "name": "Дніпро", "eng": "Dnipro"}
+        {"reg": "Центр-Схід", "name": "Дніпро", "eng": "Dnipro"},
+        {"reg": "Центр-Південь", "name": "Кривий Ріг", "eng": "Kryvyi Rih"},
     ]
 
-    tomorrow = datetime.now() + timedelta(days=1)
-    date_str = tomorrow.strftime("%d.%m.%Y")
+    now = datetime.now(pytz.timezone('Europe/Kiev'))
+    today_str = now.strftime("%d.%m.%Y")
+
+    tomorrow = now + timedelta(days=1)
     iso_date = tomorrow.strftime("%Y-%m-%d")
 
-    report = f"🐔 <b>Інформаційний дайджест Птахівника</b>\n📅 <b>{date_str}</b>\n\n"
+    report = f"🐔 <b>Інформаційний дайджест Птахівника</b>\n📅 <b>{today_str}</b>\n\n"
     report += "☁️ <b>ПОГОДА НА ЗАВТРА:</b>\n"
-    report += "<code>Регіон (Місто)      День | Ніч</code>\n"
+    report += "<code>Регіон (Місто)        День | Ніч</code>\n"
 
     weather_lines_for_prompt = []
 
@@ -92,20 +95,21 @@ async def get_weather_forecast():
 
                     icon = next((ICONS[k] for k in ICONS if k in wd.lower()), "☁️")
                     fmt = lambda t: (f"+{t}" if t > 0 else str(t)).rjust(4)
-                    report += f"{icon} <code>{(c['reg']+' ('+c['name']+')').ljust(17)} {fmt(d)}° | {fmt(n)}°</code>\n"
+                    report += f"{icon} <code>{(c['reg']+' ('+c['name']+')').ljust(19)} {fmt(d)}° | {fmt(n)}°</code>\n"
                     weather_lines_for_prompt.append(
                         f"{c['reg']} ({c['name']}): день {d}°C, ніч {n}°C, {wd}"
                     )
             except Exception as e:
                 logger.error(f"Помилка {c['name']}: {e}")
-                report += f"❌ <code>{c['name'].ljust(17)} помилка</code>\n"
+                report += f"❌ <code>{c['name'].ljust(19)} помилка</code>\n"
 
     # --- Отримуємо grain context і дані для Gemini ---
     grain_info = ""
-    grain_data_for_prompt = ""
+    market_data_for_prompt = ""
 
     try:
         from grain_context import get_grain_context, get_nbu_rates, get_fuel_prices, get_grain_prices
+        from grain_context import load_prev_rates, load_prev_fuel, load_prev_poultry
 
         async with aiohttp.ClientSession() as session:
             rates = await get_nbu_rates(session)
@@ -114,36 +118,49 @@ async def get_weather_forecast():
 
         usd = rates.get("USD", 41.5)
         eur = rates.get("EUR", 0)
-        pln = rates.get("PLN", 0)
+
+        # Попередні значення для розрахунку змін
+        prev_rates = load_prev_rates()
+        prev_fuel = load_prev_fuel()
+        prev_poultry = load_prev_poultry()
+
+        def fmt_change(curr, prev):
+            if prev is None or curr is None:
+                return "без змін"
+            diff = curr - prev
+            if abs(diff) < 0.01:
+                return "без змін"
+            return f"{'зріс' if diff > 0 else 'впав'} на {abs(diff):.2f}"
 
         wheat_line = next(
-            (f"~${p:.0f}/т (~{p*usd:,.0f} грн/т), динаміка {ch:+.1f}%"
+            (f"~${p:.0f}/т, динаміка {ch:+.1f}%"
              for n, p, ch, _ in grain_prices if "Пшениця" in n and ch is not None),
-            "немає даних"
+            "без змін"
         )
         corn_line = next(
-            (f"~${p:.0f}/т (~{p*usd:,.0f} грн/т), динаміка {ch:+.1f}%"
+            (f"~${p:.0f}/т, динаміка {ch:+.1f}%"
              for n, p, ch, _ in grain_prices if "Кукурудза" in n and ch is not None),
-            "немає даних"
+            "без змін"
         )
 
-        fuel_a95 = fuel.get("A95", "–")
-        fuel_dp = fuel.get("ДП", "–")
+        market_data_for_prompt = f"""Зміни цін сьогодні:
 
-        weather_summary = "\n".join(weather_lines_for_prompt) if weather_lines_for_prompt else "дані відсутні"
+Курси НБУ:
+- USD: {usd:.2f} грн ({fmt_change(usd, prev_rates.get('USD'))})
+- EUR: {eur:.2f} грн ({fmt_change(eur, prev_rates.get('EUR'))})
 
-        grain_data_for_prompt = f"""Погода на завтра по регіонах України:
-{weather_summary}
+Паливо (УкрНафта):
+- А-95: {fuel.get('A95', '–')} грн ({fmt_change(fuel.get('A95'), prev_fuel.get('A95'))})
+- Дизель: {fuel.get('ДП', '–')} грн ({fmt_change(fuel.get('ДП'), prev_fuel.get('ДП'))})
 
-Курси НБУ: USD={usd:.2f} грн, EUR={eur:.2f} грн, PLN={pln:.2f} грн
-
-Ціни на зерно (CME):
+Зерно (CME):
 - Пшениця: {wheat_line}
 - Кукурудза: {corn_line}
 
-Ціни на паливо (УкрНафта):
-- А-95: {fuel_a95} грн/л
-- Дизель: {fuel_dp} грн/л"""
+Продукція птахівництва (Novus):
+- Куряче філе: {fmt_change(prev_poultry.get('chicken_fillet'), prev_poultry.get('chicken_fillet'))}
+- Філе індички: {fmt_change(prev_poultry.get('turkey_fillet'), prev_poultry.get('turkey_fillet'))}
+- Яйця С0 10шт: {fmt_change(prev_poultry.get('eggs_10'), prev_poultry.get('eggs_10'))}"""
 
         grain_info = await get_grain_context()
         logger.info("✅ Grain context отримано")
@@ -151,52 +168,41 @@ async def get_weather_forecast():
     except Exception as e:
         logger.warning(f"Grain context failed: {e}")
 
-    # --- Gemini: порада птахівнику ---
-    advice = ""
+    # --- Gemini: коментар ринку ---
+    comment = ""
     try:
-        prompt = f"""Ти — досвідчений консультант з птахівництва в Україні.
-На основі актуальних даних дай ОДНУ конкретну практичну пораду птахівнику на завтра.
+        prompt = f"""Ти фінансовий коментатор агроринку України.
+Тобі надані зміни цін за сьогодні: курси валют, паливо, зерно, куряче філе, філе індички, яйця.
 
-{grain_data_for_prompt}
+{market_data_for_prompt}
 
-Вимоги до поради:
-- 2-3 речення, чітко і по справі
-- Враховуй реальні дані (погода, курс, ціни на корм/паливо)
-- Практична дія: що САМЕ зробити завтра
-- Без зайвих слів, без вступу типу "Рекомендую" або "Порада:"
-- Тільки текст, без форматування і символів"""
+Напиши ОДНЕ речення — що є найважливішим рухом або трендом сьогодні.
+Без цифр, без порад, без звернень типу "рекомендую" або "зверніть увагу".
+Якщо нічого суттєвого — напиши: "Спокійний день, суттєвих рухів немає.\""""
 
         resp = client.models.generate_content(
             model="gemini-2.0-flash-lite",
             contents=prompt
         )
 
-        advice_text = resp.text.strip().replace('\n', ' ').replace('  ', ' ')
-        advice_text = advice_text.strip('"').strip("'").strip()
+        comment_text = resp.text.strip().replace('\n', ' ').replace('  ', ' ')
+        comment_text = comment_text.strip('"').strip("'").strip()
 
-        if len(advice_text) > 400:
-            advice_text = advice_text[:397].rsplit(' ', 1)[0] + "..."
+        if len(comment_text) > 300:
+            comment_text = comment_text[:297].rsplit(' ', 1)[0] + "..."
 
-        logger.info(f"✅ Порада Gemini: {len(advice_text)} симв.")
-        advice = f"\n\n💡 <b>ПОРАДА НА ЗАВТРА:</b> {advice_text}"
+        logger.info(f"✅ Коментар Gemini: {len(comment_text)} симв.")
+        comment = f"\n\n📌 <b>КОМЕНТАР:</b> {comment_text}"
 
     except Exception as e:
         logger.error(f"❌ Gemini: {e}")
-        import random
-        backup = [
-            "Перевірте температуру і вентиляцію в пташнику — різкі перепади погоди впливають на імунітет птиці.",
-            "Проконтролюйте залишки корму: при зміні цін на зерно варто скоригувати рецептуру раціону.",
-            "Огляньте поголів'я на наявність стресових ознак — зміна погоди може спровокувати зниження несучості.",
-            "Перевірте запаси ліків і вітамінів — своєчасна профілактика дешевша за лікування.",
-            "Зверніть увагу на споживання води птицею: в холодну погоду потреба у воді зростає."
-        ]
-        advice = f"\n\n💡 <b>ПОРАДА НА ЗАВТРА:</b> {random.choice(backup)}"
+        comment = "\n\n📌 <b>КОМЕНТАР:</b> Спокійний день, суттєвих рухів немає."
 
     # --- Збираємо фінальне повідомлення ---
     result = report
     if grain_info:
         result += f"\n{grain_info}"
-    result += advice
+    result += comment
     result += "\n\n<b>Вдалого господарювання! 🐔</b>"
 
     return result
@@ -230,12 +236,10 @@ async def weekly_news_task():
     while True:
         now = datetime.now(pytz.timezone('Europe/Kiev'))
 
-        # weekday(): 0=Пн, 1=Вт, 2=Ср, 3=Чт, 4=Пт, 5=Сб, 6=Нд
         days_until_friday = (4 - now.weekday()) % 7
         target = now.replace(hour=9, minute=0, second=0, microsecond=0)
         target += timedelta(days=days_until_friday)
 
-        # Якщо сьогодні п'ятниця і вже після 9:00 — наступна п'ятниця
         if days_until_friday == 0 and now >= target:
             target += timedelta(days=7)
 
@@ -265,7 +269,6 @@ async def manual(m: types.Message):
 
     logger.info(f"👤 Адмін: '{m.text}'")
 
-    # Команда для тесту тижневого дайджесту новин
     if m.text and m.text.strip().lower() in ["/news", "новини", "/digest"]:
         try:
             await m.answer("⏳ Формую тижневий дайджест новин...")
@@ -277,7 +280,6 @@ async def manual(m: types.Message):
             await m.answer(f"❌ Помилка: {e}")
         return
 
-    # Стандартний щоденний дайджест
     try:
         text = await get_weather_forecast()
         await m.answer(text, parse_mode=ParseMode.HTML)
