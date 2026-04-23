@@ -15,7 +15,9 @@ logger = logging.getLogger(__name__)
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_KEY)
 
-# Тільки два напрямки
+MAX_NEWS_PER_TOPIC = 5
+MAX_TG_LENGTH = 4000  # Telegram ліміт 4096, беремо з запасом
+
 RSS_FEEDS = [
     {
         "label": "Птахівництво України",
@@ -29,11 +31,8 @@ RSS_FEEDS = [
     },
 ]
 
-MAX_NEWS_PER_TOPIC = 10  # беремо більше новин
-
 
 async def fetch_rss(session, feed):
-    """Завантажує RSS і повертає список заголовків"""
     items = []
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -41,13 +40,10 @@ async def fetch_rss(session, feed):
             if resp.status == 200:
                 text = await resp.text()
 
-                # CDATA формат
                 titles = re.findall(r'<title><!\[CDATA\[(.*?)\]\]></title>', text)
-
-                # Звичайний формат
                 if not titles:
                     titles = re.findall(r'<title>(.*?)</title>', text)
-                    titles = titles[1:]  # пропускаємо назву каналу
+                    titles = titles[1:]
 
                 for title in titles[:MAX_NEWS_PER_TOPIC]:
                     clean = title.split(' - ')[0].strip()
@@ -62,7 +58,6 @@ async def fetch_rss(session, feed):
 
 
 async def summarize_topic_with_gemini(label, items):
-    """Gemini коротко коментує кожну новину окремо"""
     if not items:
         return None
     try:
@@ -73,10 +68,9 @@ async def summarize_topic_with_gemini(label, items):
 
 {news_list}
 
-Для кожної новини напиши ОДНЕ коротке речення — про що ця новина і чому це важливо для птахівника.
-Формат відповіді — нумерований список, рівно стільки пунктів скільки новин.
-Без вступів, без підсумків, без зайвих слів.
-Відповідай українською мовою."""
+Для кожної новини напиши ОДНЕ дуже коротке речення (до 10 слів) — суть для птахівника.
+Формат: нумерований список, рівно стільки пунктів скільки новин.
+Без вступів, без підсумків. Українською мовою."""
 
         resp = client.models.generate_content(
             model="gemini-2.0-flash-lite",
@@ -93,7 +87,6 @@ async def summarize_topic_with_gemini(label, items):
 
 
 async def build_news_digest():
-    """Збирає повний тижневий дайджест новин"""
     now = datetime.now(pytz.timezone('Europe/Kiev'))
     date_str = now.strftime("%d.%m.%Y")
 
@@ -103,7 +96,6 @@ async def build_news_digest():
             items = await fetch_rss(session, feed)
             news_by_topic[feed["label"]] = items
 
-    # Заголовок
     message = f"🗞 <b>Тижневий дайджест птахівника</b>\n"
     message += f"📅 <b>{date_str}</b>\n"
     message += "―" * 14 + "\n"
@@ -113,40 +105,41 @@ async def build_news_digest():
         emoji = feed["emoji"]
         items = news_by_topic.get(label, [])
 
-        message += f"\n{emoji} <b>{label}:</b>\n"
+        block = f"\n{emoji} <b>{label}:</b>\n"
 
         if not items:
-            message += "Новин не знайдено.\n"
+            block += "Новин не знайдено.\n"
+            message += block
             continue
 
-        # Отримуємо коментарі від Gemini
         summary = await summarize_topic_with_gemini(label, items)
 
+        gemini_comments = []
         if summary:
-            # Парсимо нумерований список від Gemini
             lines = summary.split('\n')
-            gemini_comments = []
             for line in lines:
                 line = line.strip()
                 if not line:
                     continue
-                # Прибираємо нумерацію "1. " "2. " тощо
                 clean = re.sub(r'^\d+[\.\)]\s*', '', line).strip()
                 if clean:
                     gemini_comments.append(clean)
 
-            # Виводимо заголовок новини + коментар Gemini
-            for i, title in enumerate(items):
-                comment = gemini_comments[i] if i < len(gemini_comments) else ""
-                message += f"\n📰 <b>{title}</b>\n"
-                if comment:
-                    message += f"↳ {comment}\n"
-        else:
-            # Якщо Gemini не відповів — просто список заголовків
-            for title in items:
-                message += f"📰 {title}\n"
+        for i, title in enumerate(items):
+            comment = gemini_comments[i] if i < len(gemini_comments) else ""
+            # Обрізаємо заголовок якщо дуже довгий
+            if len(title) > 100:
+                title = title[:97] + "..."
+            block += f"\n📰 <b>{title}</b>\n"
+            if comment:
+                block += f"↳ {comment}\n"
 
-    # Підвал
+        # Перевіряємо чи не перевищимо ліміт
+        if len(message) + len(block) < MAX_TG_LENGTH:
+            message += block
+        else:
+            logger.warning(f"⚠️ Пропускаємо блок '{label}' — перевищення ліміту")
+
     message += "\n" + "―" * 14 + "\n"
     message += "📰 <b>Джерела:</b> "
     message += '<a href="https://agravery.com/uk/posts/category/show?slug=ptakhivnytstvo">Agravery</a> • '
