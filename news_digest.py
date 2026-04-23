@@ -15,21 +15,22 @@ logger = logging.getLogger(__name__)
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_KEY)
 
-MAX_NEWS_PER_TOPIC = 5
-MAX_TG_LENGTH = 4000  # Telegram ліміт 4096, беремо з запасом
-
 RSS_FEEDS = [
     {
         "label": "Птахівництво України",
         "emoji": "🇺🇦",
-        "url": "https://news.google.com/rss/search?q=птахівництво+Україна&hl=uk&gl=UA&ceid=UA:uk"
+        "url": "https://news.google.com/rss/search?q=птахівництво+Україна&hl=uk&gl=UA&ceid=UA:uk",
+        "pick": 2,
     },
     {
         "label": "Світові тренди галузі",
         "emoji": "🌍",
-        "url": "https://news.google.com/rss/search?q=poultry+industry+world+2026&hl=en&gl=US&ceid=US:en"
+        "url": "https://news.google.com/rss/search?q=poultry+industry+world+2026&hl=en&gl=US&ceid=US:en",
+        "pick": 1,
     },
 ]
+
+MAX_FETCH = 10  # скільки тягнемо з RSS для вибору
 
 
 async def fetch_rss(session, feed):
@@ -45,32 +46,39 @@ async def fetch_rss(session, feed):
                     titles = re.findall(r'<title>(.*?)</title>', text)
                     titles = titles[1:]
 
-                for title in titles[:MAX_NEWS_PER_TOPIC]:
+                for title in titles[:MAX_FETCH]:
                     clean = title.split(' - ')[0].strip()
                     clean = clean.replace('&amp;', '&').replace('&quot;', '"').replace('&#39;', "'")
                     if clean:
                         items.append(clean)
 
-                logger.info(f"✅ RSS '{feed['label']}': {len(items)} новин")
+                logger.info(f"✅ RSS '{feed['label']}': {len(items)} новин отримано")
     except Exception as e:
         logger.warning(f"❌ RSS '{feed['label']}': {e}")
     return items
 
 
-async def summarize_topic_with_gemini(label, items):
+async def select_and_comment(label, items, pick):
+    """Gemini відбирає N найрелевантніших новин і коментує кожну"""
     if not items:
-        return None
+        return []
     try:
         news_list = "\n".join(f"{i+1}. {item}" for i, item in enumerate(items))
 
-        prompt = f"""Ти — експерт з птахівництва та агроринку.
-Тобі надано список новин по темі "{label}".
+        prompt = f"""Ти — експерт з птахівництва та агроринку України.
+Тобі надано список новин по темі "{label}":
 
 {news_list}
 
-Для кожної новини напиши ОДНЕ дуже коротке речення (до 10 слів) — суть для птахівника.
-Формат: нумерований список, рівно стільки пунктів скільки новин.
-Без вступів, без підсумків. Українською мовою."""
+Завдання:
+1. Вибери {pick} найбільш важливі та релевантні новини для українського птахівника
+2. Для кожної вибраної новини напиши: номер оригінальної новини та одне коротке речення — суть для птахівника
+
+Формат відповіді (суворо):
+НОВИНА: [точний заголовок новини]
+КОМЕНТАР: [одне речення суті]
+
+Повтори блок {pick} рази. Без вступів, без підсумків. Українською мовою."""
 
         resp = client.models.generate_content(
             model="gemini-2.0-flash-lite",
@@ -78,12 +86,29 @@ async def summarize_topic_with_gemini(label, items):
         )
 
         text = resp.text.strip().replace('**', '')
-        logger.info(f"✅ Gemini '{label}': {len(text)} симв.")
-        return text
+        logger.info(f"✅ Gemini '{label}': вибрано {pick} новини")
+
+        # Парсимо відповідь
+        result = []
+        blocks = re.split(r'\n(?=НОВИНА:)', text)
+        for block in blocks:
+            title_match = re.search(r'НОВИНА:\s*(.+)', block)
+            comment_match = re.search(r'КОМЕНТАР:\s*(.+)', block)
+            if title_match and comment_match:
+                title = title_match.group(1).strip()
+                comment = comment_match.group(1).strip()
+                result.append((title, comment))
+
+        # Якщо парсинг не вийшов — повертаємо перші N оригінальних
+        if not result:
+            logger.warning(f"⚠️ Не вдалось розпарсити відповідь Gemini для '{label}'")
+            return [(items[i], "") for i in range(min(pick, len(items)))]
+
+        return result[:pick]
 
     except Exception as e:
         logger.error(f"❌ Gemini '{label}': {e}")
-        return None
+        return [(items[i], "") for i in range(min(pick, len(items)))]
 
 
 async def build_news_digest():
@@ -103,42 +128,23 @@ async def build_news_digest():
     for feed in RSS_FEEDS:
         label = feed["label"]
         emoji = feed["emoji"]
+        pick = feed["pick"]
         items = news_by_topic.get(label, [])
 
-        block = f"\n{emoji} <b>{label}:</b>\n"
+        message += f"\n{emoji} <b>{label}:</b>\n"
 
         if not items:
-            block += "Новин не знайдено.\n"
-            message += block
+            message += "Новин не знайдено.\n"
             continue
 
-        summary = await summarize_topic_with_gemini(label, items)
+        selected = await select_and_comment(label, items, pick)
 
-        gemini_comments = []
-        if summary:
-            lines = summary.split('\n')
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                clean = re.sub(r'^\d+[\.\)]\s*', '', line).strip()
-                if clean:
-                    gemini_comments.append(clean)
-
-        for i, title in enumerate(items):
-            comment = gemini_comments[i] if i < len(gemini_comments) else ""
-            # Обрізаємо заголовок якщо дуже довгий
-            if len(title) > 100:
-                title = title[:97] + "..."
-            block += f"\n📰 <b>{title}</b>\n"
+        for title, comment in selected:
+            if len(title) > 120:
+                title = title[:117] + "..."
+            message += f"\n📰 <b>{title}</b>\n"
             if comment:
-                block += f"↳ {comment}\n"
-
-        # Перевіряємо чи не перевищимо ліміт
-        if len(message) + len(block) < MAX_TG_LENGTH:
-            message += block
-        else:
-            logger.warning(f"⚠️ Пропускаємо блок '{label}' — перевищення ліміту")
+                message += f"↳ {comment}\n"
 
     message += "\n" + "―" * 14 + "\n"
     message += "📰 <b>Джерела:</b> "
