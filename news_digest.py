@@ -32,10 +32,11 @@ RSS_FEEDS = [
 ]
 
 MAX_FETCH = 10
+GEMINI_RETRY = 3       # кількість спроб
+GEMINI_DELAY = 15      # секунд між спробами
 
 
 def parse_pub_date(date_str):
-    """Перетворює RSS дату у формат ДД.ММ.РРРР"""
     try:
         dt = parsedate_to_datetime(date_str)
         kyiv = pytz.timezone('Europe/Kiev')
@@ -46,7 +47,6 @@ def parse_pub_date(date_str):
 
 
 async def fetch_rss(session, feed):
-    """Повертає список (заголовок, дата)"""
     items = []
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -54,11 +54,9 @@ async def fetch_rss(session, feed):
             if resp.status == 200:
                 text = await resp.text()
 
-                # Витягуємо всі <item> блоки
                 item_blocks = re.findall(r'<item>(.*?)</item>', text, re.DOTALL)
 
                 for block in item_blocks[:MAX_FETCH]:
-                    # Заголовок
                     title_match = re.search(r'<title><!\[CDATA\[(.*?)\]\]></title>', block)
                     if not title_match:
                         title_match = re.search(r'<title>(.*?)</title>', block)
@@ -66,21 +64,44 @@ async def fetch_rss(session, feed):
                     title = title.split(' - ')[0].strip()
                     title = title.replace('&amp;', '&').replace('&quot;', '"').replace('&#39;', "'")
 
-                    # Дата публікації
                     date_match = re.search(r'<pubDate>(.*?)</pubDate>', block)
                     pub_date = parse_pub_date(date_match.group(1).strip()) if date_match else ""
+
+                    # Фільтруємо сміття — надто короткі або рекламні заголовки
+                    if len(title) < 20:
+                        continue
+                    spam_keywords = ['report', 'market size', 'bn market', 'cagr', 'forecast report']
+                    if any(kw in title.lower() for kw in spam_keywords):
+                        continue
 
                     if title:
                         items.append((title, pub_date))
 
-                logger.info(f"✅ RSS '{feed['label']}': {len(items)} новин отримано")
+                logger.info(f"✅ RSS '{feed['label']}': {len(items)} новин після фільтрації")
     except Exception as e:
         logger.warning(f"❌ RSS '{feed['label']}': {e}")
     return items
 
 
+async def gemini_request(prompt):
+    """Запит до Gemini з retry при 429"""
+    for attempt in range(GEMINI_RETRY):
+        try:
+            resp = client.models.generate_content(
+                model="gemini-2.0-flash-lite",
+                contents=prompt
+            )
+            return resp.text.strip().replace('**', '')
+        except Exception as e:
+            if '429' in str(e) and attempt < GEMINI_RETRY - 1:
+                logger.warning(f"⚠️ Gemini 429 — чекаємо {GEMINI_DELAY}с (спроба {attempt+1}/{GEMINI_RETRY})")
+                await asyncio.sleep(GEMINI_DELAY)
+            else:
+                raise e
+    return None
+
+
 async def select_and_comment(label, items, pick):
-    """Gemini відбирає N найрелевантніших новин і коментує кожну"""
     if not items:
         return []
     try:
@@ -93,23 +114,22 @@ async def select_and_comment(label, items, pick):
 
 Завдання:
 1. Вибери {pick} найбільш важливі та релевантні новини для українського птахівника
-2. Для кожної вибраної новини напиши: точний заголовок та одне коротке речення — суть для птахівника
+2. Для кожної вибраної новини:
+   - Напиши покращений заголовок українською — додай деталі якщо знаєш (назви компаній, регіони, цифри)
+   - Напиши одне коротке речення — суть для птахівника
 
 Формат відповіді (суворо):
-НОВИНА: [точний заголовок новини]
+НОВИНА: [покращений заголовок українською]
 КОМЕНТАР: [одне речення суті]
 
-Повтори блок {pick} рази. Без вступів, без підсумків. Українською мовою."""
+Повтори блок {pick} рази. Без вступів, без підсумків."""
 
-        resp = client.models.generate_content(
-            model="gemini-2.0-flash-lite",
-            contents=prompt
-        )
+        text = await gemini_request(prompt)
+        if not text:
+            return [(items[i][0], "", items[i][1]) for i in range(min(pick, len(items)))]
 
-        text = resp.text.strip().replace('**', '')
-        logger.info(f"✅ Gemini '{label}': вибрано {pick} новини")
+        logger.info(f"✅ Gemini '{label}': відповідь отримано")
 
-        # Парсимо відповідь Gemini
         result = []
         blocks = re.split(r'\n(?=НОВИНА:)', text)
         for block in blocks:
@@ -119,10 +139,9 @@ async def select_and_comment(label, items, pick):
                 gemini_title = title_match.group(1).strip()
                 comment = comment_match.group(1).strip()
 
-                # Знаходимо дату для цієї новини — шукаємо найближчий збіг
+                # Знаходимо дату — шукаємо збіг з оригінальним заголовком
                 pub_date = ""
                 for orig_title, orig_date in items:
-                    # Порівнюємо перші 40 символів
                     if orig_title[:40].lower() in gemini_title[:60].lower() or \
                        gemini_title[:40].lower() in orig_title[:60].lower():
                         pub_date = orig_date
@@ -166,6 +185,9 @@ async def build_news_digest():
         if not items:
             message += "Новин не знайдено.\n"
             continue
+
+        # Затримка між запитами до Gemini щоб уникнути 429
+        await asyncio.sleep(5)
 
         selected = await select_and_comment(label, items, pick)
 
