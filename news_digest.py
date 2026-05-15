@@ -3,7 +3,6 @@ import aiohttp
 import logging
 import re
 from datetime import datetime
-from email.utils import parsedate_to_datetime
 import pytz
 from google import genai
 import os
@@ -16,34 +15,28 @@ logger = logging.getLogger(__name__)
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_KEY)
 
+GEMINI_RETRY = 3
+GEMINI_DELAY = 15
+
 RSS_FEEDS = [
     {
         "label": "Птахівництво України",
         "emoji": "🇺🇦",
         "url": "https://news.google.com/rss/search?q=птахівництво+Україна&hl=uk&gl=UA&ceid=UA:uk",
-        "pick": 2,
     },
     {
         "label": "Світові тренди галузі",
         "emoji": "🌍",
         "url": "https://news.google.com/rss/search?q=poultry+industry+world+2026&hl=en&gl=US&ceid=US:en",
-        "pick": 1,
+    },
+    {
+        "label": "Законодавство та держпідтримка",
+        "emoji": "📋",
+        "url": "https://news.google.com/rss/search?q=агросектор+субсидія+закон+держпідтримка+Україна+2026&hl=uk&gl=UA&ceid=UA:uk",
     },
 ]
 
-MAX_FETCH = 10
-GEMINI_RETRY = 3       # кількість спроб
-GEMINI_DELAY = 15      # секунд між спробами
-
-
-def parse_pub_date(date_str):
-    try:
-        dt = parsedate_to_datetime(date_str)
-        kyiv = pytz.timezone('Europe/Kiev')
-        dt_kyiv = dt.astimezone(kyiv)
-        return dt_kyiv.strftime("%d.%m.%Y")
-    except Exception:
-        return ""
+MAX_FETCH = 8
 
 
 async def fetch_rss(session, feed):
@@ -64,20 +57,17 @@ async def fetch_rss(session, feed):
                     title = title.split(' - ')[0].strip()
                     title = title.replace('&amp;', '&').replace('&quot;', '"').replace('&#39;', "'")
 
-                    date_match = re.search(r'<pubDate>(.*?)</pubDate>', block)
-                    pub_date = parse_pub_date(date_match.group(1).strip()) if date_match else ""
-
-                    # Фільтруємо сміття — надто короткі або рекламні заголовки
+                    # Фільтруємо сміття
                     if len(title) < 20:
                         continue
-                    spam_keywords = ['report', 'market size', 'bn market', 'cagr', 'forecast report']
+                    spam_keywords = ['bn market', 'cagr', 'forecast report', 'market size', 'market research']
                     if any(kw in title.lower() for kw in spam_keywords):
                         continue
 
                     if title:
-                        items.append((title, pub_date))
+                        items.append(title)
 
-                logger.info(f"✅ RSS '{feed['label']}': {len(items)} новин після фільтрації")
+                logger.info(f"✅ RSS '{feed['label']}': {len(items)} новин")
     except Exception as e:
         logger.warning(f"❌ RSS '{feed['label']}': {e}")
     return items
@@ -91,7 +81,7 @@ async def gemini_request(prompt):
                 model="gemini-2.0-flash-lite",
                 contents=prompt
             )
-            return resp.text.strip().replace('**', '')
+            return resp.text.strip().replace('**', '').replace('*', '')
         except Exception as e:
             if '429' in str(e) and attempt < GEMINI_RETRY - 1:
                 logger.warning(f"⚠️ Gemini 429 — чекаємо {GEMINI_DELAY}с (спроба {attempt+1}/{GEMINI_RETRY})")
@@ -101,63 +91,36 @@ async def gemini_request(prompt):
     return None
 
 
-async def select_and_comment(label, items, pick):
+async def summarize_topic(label, items):
+    """Gemini пише зв'язний огляд по темі — 3-4 речення"""
     if not items:
-        return []
+        return None
     try:
-        news_list = "\n".join(f"{i+1}. {title}" for i, (title, _) in enumerate(items))
+        news_list = "\n".join(f"- {title}" for title in items)
 
         prompt = f"""Ти — експерт з птахівництва та агроринку України.
-Тобі надано список новин по темі "{label}":
+Тобі надано заголовки новин по темі "{label}" за цей тиждень:
 
 {news_list}
 
-Завдання:
-1. Вибери {pick} найбільш важливі та релевантні новини для українського птахівника
-2. Для кожної вибраної новини:
-   - Напиши покращений заголовок українською — додай деталі якщо знаєш (назви компаній, регіони, цифри)
-   - Напиши одне коротке речення — суть для птахівника
+Напиши зв'язний огляд з 3-4 речень українською мовою:
+- Що відбувається по цій темі
+- Що це означає для українського птахівника
+- Якщо є конкретні цифри або факти — згадай їх
 
-Формат відповіді (суворо):
-НОВИНА: [покращений заголовок українською]
-КОМЕНТАР: [одне речення суті]
-
-Повтори блок {pick} рази. Без вступів, без підсумків."""
+Вимоги:
+- Суцільний текст без списків, без заголовків, без форматування
+- Без зайвих вступів типу "За цей тиждень..." або "Згідно з новинами..."
+- Якщо новини нерелевантні або порожні — напиши: "Без суттєвих новин цього тижня."
+- Тільки текст"""
 
         text = await gemini_request(prompt)
-        if not text:
-            return [(items[i][0], "", items[i][1]) for i in range(min(pick, len(items)))]
-
-        logger.info(f"✅ Gemini '{label}': відповідь отримано")
-
-        result = []
-        blocks = re.split(r'\n(?=НОВИНА:)', text)
-        for block in blocks:
-            title_match = re.search(r'НОВИНА:\s*(.+)', block)
-            comment_match = re.search(r'КОМЕНТАР:\s*(.+)', block)
-            if title_match and comment_match:
-                gemini_title = title_match.group(1).strip()
-                comment = comment_match.group(1).strip()
-
-                # Знаходимо дату — шукаємо збіг з оригінальним заголовком
-                pub_date = ""
-                for orig_title, orig_date in items:
-                    if orig_title[:40].lower() in gemini_title[:60].lower() or \
-                       gemini_title[:40].lower() in orig_title[:60].lower():
-                        pub_date = orig_date
-                        break
-
-                result.append((gemini_title, comment, pub_date))
-
-        if not result:
-            logger.warning(f"⚠️ Не вдалось розпарсити відповідь Gemini для '{label}'")
-            return [(items[i][0], "", items[i][1]) for i in range(min(pick, len(items)))]
-
-        return result[:pick]
+        logger.info(f"✅ Gemini '{label}': {len(text)} симв.")
+        return text
 
     except Exception as e:
         logger.error(f"❌ Gemini '{label}': {e}")
-        return [(items[i][0], "", items[i][1]) for i in range(min(pick, len(items)))]
+        return None
 
 
 async def build_news_digest():
@@ -174,30 +137,27 @@ async def build_news_digest():
     message += f"📅 <b>{date_str}</b>\n"
     message += "―" * 14 + "\n"
 
-    for feed in RSS_FEEDS:
+    for i, feed in enumerate(RSS_FEEDS):
         label = feed["label"]
         emoji = feed["emoji"]
-        pick = feed["pick"]
         items = news_by_topic.get(label, [])
 
         message += f"\n{emoji} <b>{label}:</b>\n"
 
         if not items:
-            message += "Новин не знайдено.\n"
+            message += "Без суттєвих новин цього тижня.\n"
             continue
 
-        # Затримка між запитами до Gemini щоб уникнути 429
-        await asyncio.sleep(5)
+        # Затримка між запитами до Gemini
+        if i > 0:
+            await asyncio.sleep(5)
 
-        selected = await select_and_comment(label, items, pick)
+        summary = await summarize_topic(label, items)
 
-        for title, comment, pub_date in selected:
-            if len(title) > 120:
-                title = title[:117] + "..."
-            date_tag = f" <i>({pub_date})</i>" if pub_date else ""
-            message += f"\n📰 <b>{title}</b>{date_tag}\n"
-            if comment:
-                message += f"↳ {comment}\n"
+        if summary:
+            message += summary + "\n"
+        else:
+            message += "Без суттєвих новин цього тижня.\n"
 
     message += "\n" + "―" * 14 + "\n"
     message += "📰 <b>Джерела:</b> "
