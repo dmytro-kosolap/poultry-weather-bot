@@ -54,13 +54,29 @@ ICONS = {
 
 async def get_weather_forecast():
     cities = [
-        {"name": "Київ", "eng": "Kyiv"},
-        {"name": "Одеса", "eng": "Odesa"},
-        {"name": "Львів", "eng": "Lviv"},
-        {"name": "Харків", "eng": "Kharkiv"},
-        {"name": "Чернігів", "eng": "Chernihiv"},
-        {"name": "Дніпро", "eng": "Dnipro"},
-        {"name": "Кривий Ріг", "eng": "Kryvyi Rih"},
+        {"name": "Київ",             "eng": "Kyiv"},
+        {"name": "Вінниця",          "eng": "Vinnytsia"},
+        {"name": "Житомир",          "eng": "Zhytomyr"},
+        {"name": "Ужгород",          "eng": "Uzhhorod"},
+        {"name": "Івано-Франківськ", "eng": "Ivano-Frankivsk"},
+        {"name": "Львів",            "eng": "Lviv"},
+        {"name": "Луцьк",            "eng": "Lutsk"},
+        {"name": "Рівне",            "eng": "Rivne"},
+        {"name": "Тернопіль",        "eng": "Ternopil"},
+        {"name": "Хмельницький",     "eng": "Khmelnytskyi"},
+        {"name": "Чернівці",         "eng": "Chernivtsi"},
+        {"name": "Черкаси",          "eng": "Cherkasy"},
+        {"name": "Кропивницький",    "eng": "Kropyvnytskyi"},
+        {"name": "Миколаїв",         "eng": "Mykolaiv"},
+        {"name": "Одеса",            "eng": "Odesa"},
+        {"name": "Херсон",           "eng": "Kherson"},
+        {"name": "Запоріжжя",        "eng": "Zaporizhzhia"},
+        {"name": "Дніпро",           "eng": "Dnipro"},
+        {"name": "Кривий Ріг",       "eng": "Kryvyi Rih"},
+        {"name": "Полтава",          "eng": "Poltava"},
+        {"name": "Харків",           "eng": "Kharkiv"},
+        {"name": "Суми",             "eng": "Sumy"},
+        {"name": "Чернігів",         "eng": "Chernihiv"},
     ]
 
     now = datetime.now(pytz.timezone('Europe/Kiev'))
@@ -71,7 +87,7 @@ async def get_weather_forecast():
 
     report = f"🐔 <b>Інформаційний дайджест Птахівника</b>\n📅 <b>{today_str}</b>\n\n"
     report += "☁️ <b>ПОГОДА НА ЗАВТРА:</b>\n"
-    report += "<code>Місто           День | Ніч</code>\n"
+    report += "<code>Місто              День | Ніч</code>\n"
 
     weather_lines_for_prompt = []
 
@@ -95,13 +111,13 @@ async def get_weather_forecast():
 
                     icon = next((ICONS[k] for k in ICONS if k in wd.lower()), "☁️")
                     fmt = lambda t: (f"+{t}" if t > 0 else str(t)).rjust(4)
-                    report += f"{icon} <code>{c['name'].ljust(15)} {fmt(d)}° | {fmt(n)}°</code>\n"
+                    report += f"{icon} <code>{c['name'].ljust(18)} {fmt(d)}° | {fmt(n)}°</code>\n"
                     weather_lines_for_prompt.append(
                         f"{c['name']}: день {d}°C, ніч {n}°C, {wd}"
                     )
             except Exception as e:
                 logger.error(f"Помилка {c['name']}: {e}")
-                report += f"❌ <code>{c['name'].ljust(15)} помилка</code>\n"
+                report += f"❌ <code>{c['name'].ljust(18)} помилка</code>\n"
 
     # --- Отримуємо grain context і дані для Gemini ---
     grain_info = ""
