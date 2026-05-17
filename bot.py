@@ -54,13 +54,13 @@ ICONS = {
 
 async def get_weather_forecast():
     cities = [
-        {"reg": "Центр", "name": "Київ", "eng": "Kyiv"},
-        {"reg": "Південь", "name": "Одеса", "eng": "Odesa"},
-        {"reg": "Захід", "name": "Львів", "eng": "Lviv"},
-        {"reg": "Схід", "name": "Харків", "eng": "Kharkiv"},
-        {"reg": "Північ", "name": "Чернігів", "eng": "Chernihiv"},
-        {"reg": "Центр-Схід", "name": "Дніпро", "eng": "Dnipro"},
-        {"reg": "Центр-Південь", "name": "Кривий Ріг", "eng": "Kryvyi Rih"},
+        {"name": "Київ", "eng": "Kyiv"},
+        {"name": "Одеса", "eng": "Odesa"},
+        {"name": "Львів", "eng": "Lviv"},
+        {"name": "Харків", "eng": "Kharkiv"},
+        {"name": "Чернігів", "eng": "Chernihiv"},
+        {"name": "Дніпро", "eng": "Dnipro"},
+        {"name": "Кривий Ріг", "eng": "Kryvyi Rih"},
     ]
 
     now = datetime.now(pytz.timezone('Europe/Kiev'))
@@ -71,7 +71,7 @@ async def get_weather_forecast():
 
     report = f"🐔 <b>Інформаційний дайджест Птахівника</b>\n📅 <b>{today_str}</b>\n\n"
     report += "☁️ <b>ПОГОДА НА ЗАВТРА:</b>\n"
-    report += "<code>Регіон (Місто)        День | Ніч</code>\n"
+    report += "<code>Місто           День | Ніч</code>\n"
 
     weather_lines_for_prompt = []
 
@@ -95,13 +95,13 @@ async def get_weather_forecast():
 
                     icon = next((ICONS[k] for k in ICONS if k in wd.lower()), "☁️")
                     fmt = lambda t: (f"+{t}" if t > 0 else str(t)).rjust(4)
-                    report += f"{icon} <code>{(c['reg']+' ('+c['name']+')').ljust(19)} {fmt(d)}° | {fmt(n)}°</code>\n"
+                    report += f"{icon} <code>{c['name'].ljust(15)} {fmt(d)}° | {fmt(n)}°</code>\n"
                     weather_lines_for_prompt.append(
-                        f"{c['reg']} ({c['name']}): день {d}°C, ніч {n}°C, {wd}"
+                        f"{c['name']}: день {d}°C, ніч {n}°C, {wd}"
                     )
             except Exception as e:
                 logger.error(f"Помилка {c['name']}: {e}")
-                report += f"❌ <code>{c['name'].ljust(19)} помилка</code>\n"
+                report += f"❌ <code>{c['name'].ljust(15)} помилка</code>\n"
 
     # --- Отримуємо grain context і дані для Gemini ---
     grain_info = ""
@@ -119,7 +119,6 @@ async def get_weather_forecast():
         usd = rates.get("USD", 41.5)
         eur = rates.get("EUR", 0)
 
-        # Попередні значення для розрахунку змін
         prev_rates = load_prev_rates()
         prev_fuel = load_prev_fuel()
         prev_poultry = load_prev_poultry()
@@ -145,7 +144,7 @@ async def get_weather_forecast():
 
         market_data_for_prompt = f"""Зміни цін сьогодні:
 
-Курси НБУ:
+Курси НБУ (підвищення курсу = гривня слабшає):
 - USD: {usd:.2f} грн ({fmt_change(usd, prev_rates.get('USD'))})
 - EUR: {eur:.2f} грн ({fmt_change(eur, prev_rates.get('EUR'))})
 
@@ -173,6 +172,8 @@ async def get_weather_forecast():
     try:
         prompt = f"""Ти фінансовий коментатор агроринку України.
 Тобі надані зміни цін за сьогодні: курси валют, паливо, зерно, куряче філе, філе індички, яйця.
+
+Важливо: якщо курс USD або EUR до гривні зріс — це означає що гривня ослабла. Якщо впав — гривня зміцніла.
 
 {market_data_for_prompt}
 
@@ -209,7 +210,6 @@ async def get_weather_forecast():
 
 
 async def daily_task():
-    """Щоденна розсилка о 19:00"""
     while True:
         now = datetime.now(pytz.timezone('Europe/Kiev'))
         target = now.replace(hour=19, minute=0, second=0, microsecond=0)
@@ -232,7 +232,6 @@ async def daily_task():
 
 
 async def weekly_news_task():
-    """Щотижнева розсилка новин у п'ятницю о 9:00"""
     while True:
         now = datetime.now(pytz.timezone('Europe/Kiev'))
 
