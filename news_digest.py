@@ -78,7 +78,7 @@ async def gemini_request(prompt):
     for attempt in range(GEMINI_RETRY):
         try:
             resp = client.models.generate_content(
-                model="gemini-2.0-flash-lite",
+                model="gemini-2.5-flash-lite",
                 contents=prompt
             )
             return resp.text.strip().replace('**', '').replace('*', '')
