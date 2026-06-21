@@ -3,6 +3,7 @@ import aiohttp
 import yfinance as yf
 import json
 import re
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
@@ -13,14 +14,58 @@ RATES_FILE = "rates_history.json"
 FUEL_FILE = "fuel_history.json"
 POULTRY_FILE = "poultry_prices_history.json"
 
-# ⚠️ КОНКРЕТНІ Ф'ЮЧЕРСНІ КОНТРАКТИ замість continuous ZC=F / ZW=F
-# Continuous тикери (ZC=F, ZW=F) можуть стрибати при автоматичній заміні
-# контракту (роловері), що дає фантомні зміни ціни в кілька відсотків.
-# ПОТРІБНО ОНОВЛЮВАТИ за ~3-4 тижні до дати експірації контракту:
-#   N = липень, U = вересень, Z = грудень, H = березень, K = травень
-# Поточні контракти (станом на червень 2026):
-WHEAT_TICKER = "ZWN26.CBT"   # Пшениця, липень 2026
-CORN_TICKER = "ZCN26.CBT"    # Кукурудза, липень 2026
+# ── Автоматичний вибір ф'ючерсного контракту ──────────────────────────
+# CME торгує зерном по контрактах з місяцями постачання, позначеними літерами:
+#   H=березень  K=травень  N=липень  U=вересень  Z=грудень
+# Цей набір однаковий для пшениці (ZW) і кукурудзи (ZC) на CBOT.
+# Щоб уникнути "мертвих" контрактів з низькою ліквідністю, переходимо
+# на наступний контракт за ~25 днів до початку його місяця постачання.
+
+CONTRACT_MONTHS = [
+    (3, "H"), (5, "K"), (7, "N"), (9, "U"), (12, "Z")
+]
+ROLLOVER_DAYS_BEFORE = 25  # за скільки днів до 1-го числа місяця контракту переходимо на нього
+
+
+def get_active_contract_code(today=None):
+    """
+    Повертає код контракту (наприклад 'N26') для поточної дати —
+    найближчий контракт, до початку місяця якого лишається
+    більше ROLLOVER_DAYS_BEFORE днів.
+    """
+    if today is None:
+        today = datetime.now()
+
+    candidates = []
+    # Будуємо список контрактів на 2 роки вперед щоб точно перекрити поточну дату
+    for year_offset in (0, 1):
+        year = today.year + year_offset
+        for month, letter in CONTRACT_MONTHS:
+            delivery_start = datetime(year, month, 1)
+            rollover_date = delivery_start - timedelta(days=ROLLOVER_DAYS_BEFORE)
+            candidates.append((rollover_date, delivery_start, letter, year))
+
+    candidates.sort(key=lambda x: x[1])  # сортуємо за датою постачання
+
+    # Шукаємо перший контракт, чия дата роловеру ще не настала
+    for rollover_date, delivery_start, letter, year in candidates:
+        if today < rollover_date:
+            yy = str(year)[-2:]
+            return f"{letter}{yy}"
+
+    # fallback — якщо щось пішло не так, беремо останній у списку
+    rollover_date, delivery_start, letter, year = candidates[-1]
+    yy = str(year)[-2:]
+    return f"{letter}{yy}"
+
+
+def get_grain_tickers():
+    """Формує тикери пшениці і кукурудзи на основі поточної дати"""
+    code = get_active_contract_code()
+    wheat_ticker = f"ZW{code}.CBT"
+    corn_ticker = f"ZC{code}.CBT"
+    return wheat_ticker, corn_ticker
+
 
 # Конкретні сторінки товарів на Novus — щоденні ціни
 NOVUS_PRODUCTS = {
@@ -215,16 +260,19 @@ def price_change_emoji(curr, prev):
 
 def get_grain_prices():
     """
-    Отримує ціни на пшеницю і кукурудзу з КОНКРЕТНИХ ф'ючерсних контрактів
-    (не continuous ZC=F/ZW=F) щоб уникнути фантомних стрибків при роловері.
-    Якщо денна зміна виглядає аномально великою (>8%) — це, ймовірно,
-    тиждень з вихідними або проблема з контрактом, тому показуємо без знаку %.
+    Отримує ціни на пшеницю і кукурудзу з АВТОМАТИЧНО вибраного
+    активного ф'ючерсного контракту (не continuous ZC=F/ZW=F),
+    щоб уникнути фантомних стрибків при роловері.
+    Контракт оновлюється сам — нічого вручну міняти не треба.
     """
     results = []
     MAX_REASONABLE_CHANGE = 8.0  # % — захист від аномальних стрибків
 
+    wheat_ticker, corn_ticker = get_grain_tickers()
+    logger.info(f"📋 Активні контракти: пшениця={wheat_ticker}, кукурудза={corn_ticker}")
+
     try:
-        wheat = yf.Ticker(WHEAT_TICKER)
+        wheat = yf.Ticker(wheat_ticker)
         wh = wheat.history(period="5d")
         if len(wh) >= 2:
             price_now = wh["Close"].iloc[-1]
@@ -233,7 +281,7 @@ def get_grain_prices():
             change = ((price_now - price_prev) / price_prev) * 100
 
             if abs(change) > MAX_REASONABLE_CHANGE:
-                logger.warning(f"⚠️ Пшениця: аномальна зміна {change:.1f}% — можливо проблема з контрактом {WHEAT_TICKER}")
+                logger.warning(f"⚠️ Пшениця: аномальна зміна {change:.1f}% — можливо проблема з контрактом {wheat_ticker}")
                 results.append(("🌾 Пшениця", price_usd, None, ""))
             else:
                 emoji = "📈" if change > 0 else "📉" if change < 0 else "➡️"
@@ -241,11 +289,13 @@ def get_grain_prices():
         elif len(wh) == 1:
             price_usd = (wh["Close"].iloc[-1] / 100) * WHEAT_BUSHELS_PER_TON
             results.append(("🌾 Пшениця", price_usd, None, ""))
+        else:
+            logger.warning(f"⚠️ Пшениця: контракт {wheat_ticker} не повернув даних")
     except Exception as e:
-        logger.error(f"Помилка отримання пшениці ({WHEAT_TICKER}): {e}")
+        logger.error(f"Помилка отримання пшениці ({wheat_ticker}): {e}")
 
     try:
-        corn = yf.Ticker(CORN_TICKER)
+        corn = yf.Ticker(corn_ticker)
         co = corn.history(period="5d")
         if len(co) >= 2:
             price_now = co["Close"].iloc[-1]
@@ -254,7 +304,7 @@ def get_grain_prices():
             change = ((price_now - price_prev) / price_prev) * 100
 
             if abs(change) > MAX_REASONABLE_CHANGE:
-                logger.warning(f"⚠️ Кукурудза: аномальна зміна {change:.1f}% — можливо проблема з контрактом {CORN_TICKER}")
+                logger.warning(f"⚠️ Кукурудза: аномальна зміна {change:.1f}% — можливо проблема з контрактом {corn_ticker}")
                 results.append(("🌽 Кукурудза", price_usd, None, ""))
             else:
                 emoji = "📈" if change > 0 else "📉" if change < 0 else "➡️"
@@ -262,8 +312,10 @@ def get_grain_prices():
         elif len(co) == 1:
             price_usd = (co["Close"].iloc[-1] / 100) * CORN_BUSHELS_PER_TON
             results.append(("🌽 Кукурудза", price_usd, None, ""))
+        else:
+            logger.warning(f"⚠️ Кукурудза: контракт {corn_ticker} не повернув даних")
     except Exception as e:
-        logger.error(f"Помилка отримання кукурудзи ({CORN_TICKER}): {e}")
+        logger.error(f"Помилка отримання кукурудзи ({corn_ticker}): {e}")
 
     return results
 
@@ -324,7 +376,7 @@ async def get_grain_context():
                     lines.append(f"{name}: ~${price_usd:.0f}/т  <b>{price_uah:,.0f} грн/т</b>")
             grain_block = "📊 <b>Зерно (CME, $/т):</b>\n" + "\n".join(lines)
         else:
-            grain_block = "<b>🌾 Зерновий ринок:</b>\n• <a href='https://www.cmegroup.com/markets/agriculture/grains/wheat.quotes.html'>Пшениця ZW=F</a>\n• <a href='https://www.cmegroup.com/markets/agriculture/grains/corn.quotes.html'>Кукурудза ZC=F</a>"
+            grain_block = "<b>🌾 Зерновий ринок:</b>\n• <a href='https://www.cmegroup.com/markets/agriculture/grains/wheat.quotes.html'>Пшениця</a>\n• <a href='https://www.cmegroup.com/markets/agriculture/grains/corn.quotes.html'>Кукурудза</a>"
 
         # --- Ціни на продукцію птахівництва (Novus) ---
         prev_poultry = load_prev_poultry()
