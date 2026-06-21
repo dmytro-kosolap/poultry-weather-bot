@@ -13,6 +13,15 @@ RATES_FILE = "rates_history.json"
 FUEL_FILE = "fuel_history.json"
 POULTRY_FILE = "poultry_prices_history.json"
 
+# ⚠️ КОНКРЕТНІ Ф'ЮЧЕРСНІ КОНТРАКТИ замість continuous ZC=F / ZW=F
+# Continuous тикери (ZC=F, ZW=F) можуть стрибати при автоматичній заміні
+# контракту (роловері), що дає фантомні зміни ціни в кілька відсотків.
+# ПОТРІБНО ОНОВЛЮВАТИ за ~3-4 тижні до дати експірації контракту:
+#   N = липень, U = вересень, Z = грудень, H = березень, K = травень
+# Поточні контракти (станом на червень 2026):
+WHEAT_TICKER = "ZWN26.CBT"   # Пшениця, липень 2026
+CORN_TICKER = "ZCN26.CBT"    # Кукурудза, липень 2026
+
 # Конкретні сторінки товарів на Novus — щоденні ціни
 NOVUS_PRODUCTS = {
     "chicken_fillet": {
@@ -141,11 +150,8 @@ async def get_novus_price(session, product_key):
                 text = await resp.text()
                 soup = BeautifulSoup(text, 'html.parser')
 
-                # Шукаємо ціну — шаблон "85.49 ₴" або "399.00 ₴"
-                # Novus показує ціну в тегу h6 або span з класом що містить price
                 price = None
 
-                # Спосіб 1: шукаємо через h6 (основна ціна на сторінці товару)
                 for tag in soup.find_all(['h6', 'h5', 'h4']):
                     text_val = tag.get_text(strip=True)
                     match = re.search(r'(\d+[\.,]\d+)\s*[₴грн]', text_val)
@@ -155,7 +161,6 @@ async def get_novus_price(session, product_key):
                             logger.info(f"✅ {product['label']}: {price} {product['unit']} (h-tag)")
                             return price
 
-                # Спосіб 2: шукаємо через весь текст сторінки regex
                 matches = re.findall(r'(\d{2,4}[\.,]\d{2})\s*₴', text)
                 prices = []
                 for m in matches:
@@ -164,7 +169,6 @@ async def get_novus_price(session, product_key):
                         prices.append(val)
 
                 if prices:
-                    # Перша знайдена ціна — зазвичай ціна самого товару
                     price = prices[0]
                     logger.info(f"✅ {product['label']}: {price} {product['unit']} (regex)")
                     return price
@@ -210,38 +214,56 @@ def price_change_emoji(curr, prev):
 
 
 def get_grain_prices():
+    """
+    Отримує ціни на пшеницю і кукурудзу з КОНКРЕТНИХ ф'ючерсних контрактів
+    (не continuous ZC=F/ZW=F) щоб уникнути фантомних стрибків при роловері.
+    Якщо денна зміна виглядає аномально великою (>8%) — це, ймовірно,
+    тиждень з вихідними або проблема з контрактом, тому показуємо без знаку %.
+    """
     results = []
+    MAX_REASONABLE_CHANGE = 8.0  # % — захист від аномальних стрибків
+
     try:
-        wheat = yf.Ticker("ZW=F")
+        wheat = yf.Ticker(WHEAT_TICKER)
         wh = wheat.history(period="5d")
         if len(wh) >= 2:
             price_now = wh["Close"].iloc[-1]
             price_prev = wh["Close"].iloc[-2]
             price_usd = (price_now / 100) * WHEAT_BUSHELS_PER_TON
             change = ((price_now - price_prev) / price_prev) * 100
-            emoji = "📈" if change > 0 else "📉" if change < 0 else "➡️"
-            results.append(("🌾 Пшениця", price_usd, change, emoji))
+
+            if abs(change) > MAX_REASONABLE_CHANGE:
+                logger.warning(f"⚠️ Пшениця: аномальна зміна {change:.1f}% — можливо проблема з контрактом {WHEAT_TICKER}")
+                results.append(("🌾 Пшениця", price_usd, None, ""))
+            else:
+                emoji = "📈" if change > 0 else "📉" if change < 0 else "➡️"
+                results.append(("🌾 Пшениця", price_usd, change, emoji))
         elif len(wh) == 1:
             price_usd = (wh["Close"].iloc[-1] / 100) * WHEAT_BUSHELS_PER_TON
             results.append(("🌾 Пшениця", price_usd, None, ""))
     except Exception as e:
-        logger.error(f"Помилка отримання пшениці: {e}")
+        logger.error(f"Помилка отримання пшениці ({WHEAT_TICKER}): {e}")
 
     try:
-        corn = yf.Ticker("ZC=F")
+        corn = yf.Ticker(CORN_TICKER)
         co = corn.history(period="5d")
         if len(co) >= 2:
             price_now = co["Close"].iloc[-1]
             price_prev = co["Close"].iloc[-2]
             price_usd = (price_now / 100) * CORN_BUSHELS_PER_TON
             change = ((price_now - price_prev) / price_prev) * 100
-            emoji = "📈" if change > 0 else "📉" if change < 0 else "➡️"
-            results.append(("🌽 Кукурудза", price_usd, change, emoji))
+
+            if abs(change) > MAX_REASONABLE_CHANGE:
+                logger.warning(f"⚠️ Кукурудза: аномальна зміна {change:.1f}% — можливо проблема з контрактом {CORN_TICKER}")
+                results.append(("🌽 Кукурудза", price_usd, None, ""))
+            else:
+                emoji = "📈" if change > 0 else "📉" if change < 0 else "➡️"
+                results.append(("🌽 Кукурудза", price_usd, change, emoji))
         elif len(co) == 1:
             price_usd = (co["Close"].iloc[-1] / 100) * CORN_BUSHELS_PER_TON
             results.append(("🌽 Кукурудза", price_usd, None, ""))
     except Exception as e:
-        logger.error(f"Помилка отримання кукурудзи: {e}")
+        logger.error(f"Помилка отримання кукурудзи ({CORN_TICKER}): {e}")
 
     return results
 
