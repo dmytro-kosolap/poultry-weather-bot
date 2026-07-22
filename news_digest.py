@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 from google import genai
 from google.genai import types
@@ -17,24 +17,6 @@ client = genai.Client(api_key=GEMINI_KEY)
 
 GEMINI_RETRY = 3
 GEMINI_DELAY = 15
-
-TOPICS = [
-    {
-        "label": "Птахівництво України",
-        "emoji": "🇺🇦",
-        "query": "птахівництво Україна новини цього тижня"
-    },
-    {
-        "label": "Світові тренди галузі",
-        "emoji": "🌍",
-        "query": "poultry industry news this week"
-    },
-    {
-        "label": "Законодавство та держпідтримка",
-        "emoji": "📋",
-        "query": "агросектор птахівництво закон підтримка Україна новини цього тижня"
-    },
-]
 
 
 async def gemini_call(prompt, use_search=False):
@@ -64,48 +46,47 @@ async def gemini_call(prompt, use_search=False):
     return None
 
 
-async def search_and_summarize(topic):
+async def get_ukraine_poultry_news():
     """
-    Крок 1: Gemini + Google Search — шукає новини без обмежень
-    Крок 2: Gemini без Search — стискає результат до 2 речень
+    Крок 1: чистий пошук без обмежень
+    Крок 2: стиснення до 2 речень
     """
-    label = topic["label"]
-    query = topic["query"]
 
-    # ── Крок 1: чистий пошук ──────────────────────────────────────────
-    search_prompt = f"Знайди останні новини та події за запитом: {query}"
+    # Крок 1 — пошук
+    raw = await gemini_call(
+        "Знайди останні новини про птахівництво в Україні за цей тиждень",
+        use_search=True
+    )
 
-    raw_result = await gemini_call(search_prompt, use_search=True)
-
-    if not raw_result:
-        logger.warning(f"⚠️ '{label}': пошук не повернув результатів")
+    if not raw:
         return None
 
-    logger.info(f"🔍 '{label}': знайдено {len(raw_result)} симв.")
+    logger.info(f"🔍 Пошук повернув {len(raw)} симв.")
 
-    # ── Крок 2: стиснення без пошуку ──────────────────────────────────
-    await asyncio.sleep(3)  # невелика пауза між запитами
+    # Крок 2 — стиснення
+    await asyncio.sleep(3)
 
-    summarize_prompt = f"""Ось результати пошуку новин на тему "{label}":
+    summary = await gemini_call(
+        f"""Ось новини про птахівництво України:
 
-{raw_result}
+{raw}
 
-Виділи 2 найсвіжіші та найважливіші факти і напиши їх українською у вигляді 2 коротких речень.
-Тільки конкретні події, цифри, назви — без загальних фраз і висновків.
-Якщо в тексті немає свіжих новин цього тижня — напиши: "Без суттєвих новин цього тижня."
-Тільки 2 речення, більше нічого."""
-
-    summary = await gemini_call(summarize_prompt, use_search=False)
+Виділи 2 найцікавіші факти цього тижня і напиши їх українською у вигляді 2 коротких речень.
+Тільки конкретні події, цифри, назви компаній — без загальних фраз і висновків.
+Якщо свіжих новин немає — напиши: "Без суттєвих новин цього тижня."
+Рівно 2 речення, не більше.""",
+        use_search=False
+    )
 
     if not summary:
         return None
 
-    # Прибираємо markdown на всяк випадок
+    # Прибираємо markdown
     summary = summary.replace('**', '').replace('*', '').replace('#', '')
     summary = re.sub(r'^\s*[-•]\s*', '', summary, flags=re.MULTILINE)
     summary = summary.strip()
 
-    logger.info(f"✅ '{label}': підсумок {len(summary)} симв.")
+    logger.info(f"✅ Підсумок: {len(summary)} симв.")
     return summary
 
 
@@ -115,23 +96,16 @@ async def build_news_digest():
 
     message = f"🗞 <b>Тижневий дайджест птахівника</b>\n"
     message += f"📅 <b>{date_str}</b>\n"
-    message += "―" * 14 + "\n"
+    message += "―" * 14 + "\n\n"
 
-    for i, topic in enumerate(TOPICS):
-        label = topic["label"]
-        emoji = topic["emoji"]
+    message += "🇺🇦 <b>Птахівництво України:</b>\n"
 
-        message += f"\n{emoji} <b>{label}:</b>\n"
+    news = await get_ukraine_poultry_news()
 
-        if i > 0:
-            await asyncio.sleep(8)
-
-        summary = await search_and_summarize(topic)
-
-        if summary:
-            message += summary + "\n"
-        else:
-            message += "Без суттєвих новин цього тижня.\n"
+    if news:
+        message += news + "\n"
+    else:
+        message += "Без суттєвих новин цього тижня.\n"
 
     message += "\n" + "―" * 14 + "\n"
     message += "🔍 <b>Джерело:</b> Gemini AI + Google Search"
