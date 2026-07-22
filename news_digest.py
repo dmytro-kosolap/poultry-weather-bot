@@ -1,10 +1,11 @@
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from google import genai
 from google.genai import types
 import os
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,36 +22,45 @@ TOPICS = [
     {
         "label": "Птахівництво України",
         "emoji": "🇺🇦",
-        "query": "птахівництво Україна новини 2026 експорт курятина яйця фабрика"
+        "query": "птахівництво Україна новини цього тижня"
     },
     {
         "label": "Світові тренди галузі",
         "emoji": "🌍",
-        "query": "poultry industry world news 2026 production export prices"
+        "query": "poultry industry news this week"
     },
     {
         "label": "Законодавство та держпідтримка",
         "emoji": "📋",
-        "query": "птахівництво агросектор закон субсидія держпідтримка Україна 2026"
+        "query": "агросектор птахівництво закон підтримка Україна новини цього тижня"
     },
 ]
 
 
-async def search_and_summarize(topic):
-    """Gemini шукає через Google Search і робить короткий огляд"""
+def truncate_to_sentences(text, max_sentences=2):
+    """Обрізає текст до максимальної кількості речень"""
+    # Розбиваємо по крапці/знаку оклику/питання
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    sentences = [s for s in sentences if s.strip()]
+    return ' '.join(sentences[:max_sentences])
+
+
+async def search_and_summarize(topic, week_start, week_end):
+    """Gemini шукає через Google Search тільки свіжі новини за поточний тиждень"""
     label = topic["label"]
     query = topic["query"]
 
     for attempt in range(GEMINI_RETRY):
         try:
-            prompt = f"""Зроби пошук за запитом: "{query}"
+            prompt = f"""Пошук: "{query}"
 
-Знайди конкретні факти та новини за останні 7 днів.
-Напиши РІВНО 2 речення українською — не більше і не менше.
-Тільки конкретика: цифри, назви компаній, регіони, події. 
-Без загальних фраз, без висновків, без порад птахівникам.
-Якщо свіжих новин немає — напиши: "Без суттєвих новин цього тижня."
-Тільки суцільний текст без форматування, без списків."""
+Знайди події або новини які сталися з {week_start} по {week_end}.
+ВАЖЛИВО: враховуй ТІЛЬКИ події цього тижня, не раніше {week_start}.
+Якщо подія сталась раніше — не згадуй її.
+
+Напиши 2 речення українською з конкретними фактами: цифри, назви компаній, що саме відбулось.
+Якщо свіжих новин за цей тиждень немає — напиши тільки: "Без суттєвих новин цього тижня."
+Тільки текст, без форматування, без списків, без висновків."""
 
             response = client.models.generate_content(
                 model="gemini-2.5-flash-lite",
@@ -61,11 +71,14 @@ async def search_and_summarize(topic):
             )
 
             text = response.text.strip()
+            # Прибираємо markdown
             text = text.replace('**', '').replace('*', '').replace('##', '').replace('#', '')
-            # Прибираємо маркери списків
-            import re
             text = re.sub(r'^\s*[-•]\s*', '', text, flags=re.MULTILINE)
             text = text.strip()
+
+            # Жорстко обрізаємо до 2 речень
+            if text != "Без суттєвих новин цього тижня.":
+                text = truncate_to_sentences(text, max_sentences=2)
 
             logger.info(f"✅ Gemini Search '{label}': {len(text)} симв.")
             return text
@@ -85,6 +98,10 @@ async def build_news_digest():
     now = datetime.now(pytz.timezone('Europe/Kiev'))
     date_str = now.strftime("%d.%m.%Y")
 
+    # Визначаємо діапазон поточного тижня (пн-пт)
+    week_start = (now - timedelta(days=now.weekday())).strftime("%d.%m.%Y")
+    week_end = now.strftime("%d.%m.%Y")
+
     message = f"🗞 <b>Тижневий дайджест птахівника</b>\n"
     message += f"📅 <b>{date_str}</b>\n"
     message += "―" * 14 + "\n"
@@ -98,7 +115,7 @@ async def build_news_digest():
         if i > 0:
             await asyncio.sleep(8)
 
-        summary = await search_and_summarize(topic)
+        summary = await search_and_summarize(topic, week_start, week_end)
 
         if summary:
             message += summary + "\n"
