@@ -17,45 +17,39 @@ client = genai.Client(api_key=GEMINI_KEY)
 GEMINI_RETRY = 3
 GEMINI_DELAY = 15
 
-# Теми для пошуку
 TOPICS = [
     {
         "label": "Птахівництво України",
         "emoji": "🇺🇦",
-        "query": "птахівництво Україна новини за останній тиждень 2026"
+        "query": "птахівництво Україна новини 2026 експорт курятина яйця фабрика"
     },
     {
         "label": "Світові тренди галузі",
         "emoji": "🌍",
-        "query": "poultry industry world news this week 2026"
+        "query": "poultry industry world news 2026 production export prices"
     },
     {
         "label": "Законодавство та держпідтримка",
         "emoji": "📋",
-        "query": "агросектор птахівництво закон субсидія держпідтримка Україна 2026 останні новини"
+        "query": "птахівництво агросектор закон субсидія держпідтримка Україна 2026"
     },
 ]
 
 
 async def search_and_summarize(topic):
-    """Gemini сам шукає новини через Google Search і робить огляд"""
+    """Gemini шукає через Google Search і робить короткий огляд"""
     label = topic["label"]
     query = topic["query"]
 
     for attempt in range(GEMINI_RETRY):
         try:
-            prompt = f"""Ти — експерт з птахівництва та агроринку України.
-Знайди та проаналізуй актуальні новини за темою "{label}" за останні 7 днів.
+            prompt = f"""Зроби пошук за запитом: "{query}"
 
-Запит для пошуку: {query}
-
-Напиши зв'язний огляд з 3-4 речень українською мовою:
-- Конкретні факти, цифри, назви компаній або регіонів якщо є
-- Що це означає для українського птахівника
-- Без вступів типу "За цей тиждень..." або "Згідно з пошуком..."
-- Без форматування (без *, без #, без списків)
-- Якщо актуальних новин немає — напиши: "Без суттєвих новин цього тижня."
-- Тільки суцільний текст"""
+Знайди 2-3 конкретні новини або факти за останні 7 днів.
+Напиши 3 речення українською — тільки конкретика: цифри, назви компаній, регіони, події.
+Без вступів, без загальних фраз типу "галузь розвивається" або "експерти вважають".
+Якщо свіжих новин немає — напиши: "Без суттєвих новин цього тижня."
+Тільки суцільний текст без форматування."""
 
             response = client.models.generate_content(
                 model="gemini-2.5-flash-lite",
@@ -66,19 +60,18 @@ async def search_and_summarize(topic):
             )
 
             text = response.text.strip()
-            # Прибираємо markdown форматування
             text = text.replace('**', '').replace('*', '').replace('##', '').replace('#', '')
+            # Прибираємо маркери списків
+            import re
+            text = re.sub(r'^\s*[-•]\s*', '', text, flags=re.MULTILINE)
             text = text.strip()
 
             logger.info(f"✅ Gemini Search '{label}': {len(text)} симв.")
             return text
 
         except Exception as e:
-            if '429' in str(e) and attempt < GEMINI_RETRY - 1:
-                logger.warning(f"⚠️ Gemini 429 — чекаємо {GEMINI_DELAY}с (спроба {attempt+1}/{GEMINI_RETRY})")
-                await asyncio.sleep(GEMINI_DELAY)
-            elif '503' in str(e) and attempt < GEMINI_RETRY - 1:
-                logger.warning(f"⚠️ Gemini 503 — чекаємо {GEMINI_DELAY}с (спроба {attempt+1}/{GEMINI_RETRY})")
+            if ('429' in str(e) or '503' in str(e)) and attempt < GEMINI_RETRY - 1:
+                logger.warning(f"⚠️ Gemini {str(e)[:3]} — чекаємо {GEMINI_DELAY}с (спроба {attempt+1}/{GEMINI_RETRY})")
                 await asyncio.sleep(GEMINI_DELAY)
             else:
                 logger.error(f"❌ Gemini Search '{label}': {e}")
@@ -101,7 +94,6 @@ async def build_news_digest():
 
         message += f"\n{emoji} <b>{label}:</b>\n"
 
-        # Затримка між запитами щоб уникнути 429
         if i > 0:
             await asyncio.sleep(8)
 
