@@ -5,3 +5,5 @@ google-generativeai==0.8.3
 pytz==2024.1
 feedparser==6.0.11
 beautifulsoup4==4.12.3
+googlenewsdecoder==0.1.6
+requests==2.32.3
