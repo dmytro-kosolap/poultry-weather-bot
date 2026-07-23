@@ -9,6 +9,7 @@ from urllib.parse import quote
 import pytz
 import aiohttp
 import feedparser
+from bs4 import BeautifulSoup
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
@@ -115,6 +116,33 @@ def is_duplicate(title, history, threshold=0.6):
     return False
 
 
+# ── Завантаження реального тексту статті (щоб розгорнути новину без вигадок) ──
+
+async def fetch_article_text(session, url, max_chars=3000):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        async with session.get(url, headers=headers, timeout=15, allow_redirects=True) as resp:
+            if resp.status != 200:
+                return None
+            html = await resp.text(errors="ignore")
+    except Exception as e:
+        logger.warning(f"Не вдалось завантажити статтю ({url}): {e}")
+        return None
+
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+        for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']):
+            tag.decompose()
+        paragraphs = [p.get_text(" ", strip=True) for p in soup.find_all('p')]
+        text = "\n".join(p for p in paragraphs if len(p) > 40)
+        if not text:
+            return None
+        return text[:max_chars]
+    except Exception as e:
+        logger.warning(f"Помилка парсингу статті ({url}): {e}")
+        return None
+
+
 # ── Отримання реальних, датованих заголовків через Google News RSS ──
 
 async def fetch_google_news_rss(session, query, days=FRESH_WINDOW_DAYS):
@@ -192,32 +220,71 @@ async def get_ukraine_poultry_news():
         return None, [], history
 
     top_pool = pool[:15]
-    listing = "\n".join(f"- [{it['published']}] {it['title']}" for it in top_pool)
-
+    listing = "\n".join(f"{i+1}. [{it['published']}] {it['title']}" for i, it in enumerate(top_pool))
     current_year = datetime.now().year
-    prompt = f"""Ось реальний список заголовків новин про птахівництво України за останній тиждень (з датами публікації):
+
+    # --- Крок 1: Gemini обирає 2 найкращі новини зі списку заголовків ---
+    select_prompt = f"""Ось список заголовків новин про птахівництво України за останній тиждень (з датами публікації):
 
 {listing}
 
-Вибери 2 НАЙЦІКАВІШІ і найконкретніші новини (з цифрами, назвами компаній, конкретними подіями) СУВОРО з цього списку.
-Заборонено вигадувати факти або новини, яких немає у списку вище.
+Обери РІВНО 2 найцікавіші і найконкретніші новини (з цифрами, назвами компаній, конкретними подіями).
+Пріоритет — реальні події {current_year} року (відкриття/будівництво, угоди, ціни, експорт).
+Уникай річних підсумків/ретроспектив за минулі роки, якщо є новини про поточні події.
 
-Пріоритет — реальні події ЦЬОГО тижня ({current_year} рік): відкриття/будівництво, угоди, ціни, експорт, компанії.
-УНИКАЙ новин, які є річними підсумками чи ретроспективою за минулі роки (наприклад "у 2024/2025 році зросло...") —
-навіть якщо стаття опублікована свіжо, такий підсумок даних за минулий рік менш цікавий, ніж новина про поточну подію.
-Обирай ретроспективу тільки якщо серед заголовків взагалі немає новин про поточні події.
+Дай відповідь ЛИШЕ у форматі двох номерів зі списку через кому, наприклад: 3,7
+Без жодного іншого тексту."""
 
-Напиши обрані новини українською мовою у вигляді 2 коротких речень — тільки конкретні факти, без загальних фраз і висновків.
-Якщо серед заголовків немає жодної достатньо конкретної новини — напиши рівно: "Без суттєвих новин цього тижня."
-Рівно 2 речення, не більше."""
+    selection = await gemini_call(select_prompt, use_search=False)
+    chosen_items = []
+    if selection:
+        nums = re.findall(r'\d+', selection)
+        for n in nums[:2]:
+            idx = int(n) - 1
+            if 0 <= idx < len(top_pool):
+                chosen_items.append(top_pool[idx])
 
-    summary = await gemini_call(prompt, use_search=False)
+    if not chosen_items:
+        chosen_items = top_pool[:2]
+
+    # --- Крок 2: тягнемо реальний текст обраних статей ---
+    article_texts = []
+    async with aiohttp.ClientSession() as session:
+        for it in chosen_items:
+            text = await fetch_article_text(session, it["link"])
+            article_texts.append(text)
+            await asyncio.sleep(1)  # ввічлива пауза між запитами до сайтів-джерел
+
+    sections = []
+    for it, text in zip(chosen_items, article_texts):
+        if text:
+            sections.append(
+                f"Заголовок: {it['title']} (опубліковано {it['published']})\nТекст статті:\n{text}"
+            )
+        else:
+            sections.append(
+                f"Заголовок: {it['title']} (опубліковано {it['published']})\n"
+                f"(повний текст статті недоступний — використовуй лише заголовок, не додавай зайвих деталей)"
+            )
+    joined = "\n\n---\n\n".join(sections)
+
+    # --- Крок 3: розгортаємо кожну новину на 2-3 речення на основі реального тексту ---
+    write_prompt = f"""Ось {len(chosen_items)} новини про птахівництво України з текстами статей:
+
+{joined}
+
+Для КОЖНОЇ новини напиши окремий абзац з 2-3 речень українською мовою.
+Використовуй лише конкретні факти, цифри, назви компаній — те, що дійсно є в тексті статті
+(або тільки в заголовку, якщо текст статті недоступний — тоді пиши коротше, 1 речення, без вигадок).
+Нічого не додавай понад надану інформацію.
+Онумеруй абзаци (1. ... 2. ...). Без вступних фраз, без висновків, без загальних фраз."""
+
+    summary = await gemini_call(write_prompt, use_search=False)
     if not summary:
         return None, [], history
 
     summary = summary.replace('**', '').replace('*', '').replace('#', '')
-    summary = re.sub(r'^\s*[-•]\s*', '', summary, flags=re.MULTILINE)
-    return summary.strip(), top_pool[:6], history
+    return summary.strip(), chosen_items, history
 
 
 async def build_news_digest():
