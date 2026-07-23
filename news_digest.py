@@ -10,7 +10,7 @@ import pytz
 import aiohttp
 import feedparser
 from bs4 import BeautifulSoup
-from googlenewsdecoder import gnewsdecoder
+from googlenewsdecoder import new_decoderv1, decoderv3
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
@@ -119,15 +119,40 @@ def is_duplicate(title, history, threshold=0.6):
 
 # ── Завантаження реального тексту статті (щоб розгорнути новину без вигадок) ──
 
+def _sync_resolve_google_news_url(google_link):
+    """Пробуємо два незалежні методи декодування по черзі — вони реверс-інжинірять
+    внутрішній API Google, тож якщо один метод зламається через зміни на боці Google,
+    є запасний варіант."""
+    try:
+        result = new_decoderv1(google_link, interval=1)
+        if result and result.get("status"):
+            url = result.get("decoded_url") or result.get("url")
+            if url:
+                return url
+    except Exception as e:
+        logger.warning(f"new_decoderv1 не спрацював: {e}")
+
+    try:
+        result = decoderv3(google_link)
+        if result and result.get("status"):
+            url = result.get("url") or result.get("decoded_url")
+            if url:
+                return url
+    except Exception as e:
+        logger.warning(f"decoderv3 не спрацював: {e}")
+
+    return None
+
+
 async def resolve_article_url(google_link):
     """Посилання з Google News RSS — це зашифрований редірект
     (news.google.com/rss/articles/...), а не пряма адреса статті.
-    Декодуємо його в реальний URL видання через googlenewsdecoder."""
+    Декодуємо його в реальний URL видання."""
     try:
-        result = await asyncio.to_thread(gnewsdecoder, google_link, interval=1)
-        if result and result.get("status") and result.get("decoded_url"):
-            return result["decoded_url"]
-        logger.warning(f"Не вдалось декодувати посилання Google News: {result}")
+        url = await asyncio.to_thread(_sync_resolve_google_news_url, google_link)
+        if url:
+            return url
+        logger.warning(f"Не вдалось декодувати посилання Google News: {google_link[:100]}")
     except Exception as e:
         logger.warning(f"Помилка декодування посилання Google News: {e}")
     return None
