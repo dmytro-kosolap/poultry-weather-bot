@@ -4,3 +4,4 @@ aiocron==1.8
 google-generativeai==0.8.3
 pytz==2024.1
 feedparser==6.0.11
+beautifulsoup4==4.12.3
