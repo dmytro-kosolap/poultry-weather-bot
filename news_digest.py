@@ -10,6 +10,7 @@ import pytz
 import aiohttp
 import feedparser
 from bs4 import BeautifulSoup
+from googlenewsdecoder import gnewsdecoder
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
@@ -118,15 +119,34 @@ def is_duplicate(title, history, threshold=0.6):
 
 # ── Завантаження реального тексту статті (щоб розгорнути новину без вигадок) ──
 
-async def fetch_article_text(session, url, max_chars=3000):
+async def resolve_article_url(google_link):
+    """Посилання з Google News RSS — це зашифрований редірект
+    (news.google.com/rss/articles/...), а не пряма адреса статті.
+    Декодуємо його в реальний URL видання через googlenewsdecoder."""
+    try:
+        result = await asyncio.to_thread(gnewsdecoder, google_link, interval=1)
+        if result and result.get("status") and result.get("decoded_url"):
+            return result["decoded_url"]
+        logger.warning(f"Не вдалось декодувати посилання Google News: {result}")
+    except Exception as e:
+        logger.warning(f"Помилка декодування посилання Google News: {e}")
+    return None
+
+
+async def fetch_article_text(session, google_link, max_chars=3000):
+    real_url = await resolve_article_url(google_link)
+    if not real_url:
+        return None
+
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        async with session.get(url, headers=headers, timeout=15, allow_redirects=True) as resp:
+        async with session.get(real_url, headers=headers, timeout=15, allow_redirects=True) as resp:
             if resp.status != 200:
+                logger.warning(f"Стаття {real_url}: HTTP {resp.status}")
                 return None
             html = await resp.text(errors="ignore")
     except Exception as e:
-        logger.warning(f"Не вдалось завантажити статтю ({url}): {e}")
+        logger.warning(f"Не вдалось завантажити статтю ({real_url}): {e}")
         return None
 
     try:
@@ -139,7 +159,7 @@ async def fetch_article_text(session, url, max_chars=3000):
             return None
         return text[:max_chars]
     except Exception as e:
-        logger.warning(f"Помилка парсингу статті ({url}): {e}")
+        logger.warning(f"Помилка парсингу статті ({real_url}): {e}")
         return None
 
 
