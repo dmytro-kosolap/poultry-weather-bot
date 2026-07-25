@@ -75,6 +75,7 @@ def format_instructions_block(instructions):
 CHAT_ENTER_COMMANDS = {"/chat", "чат", "/gemini"}
 CHAT_EXIT_COMMANDS = {"/endchat", "/stop", "стоп", "вихід", "exit"}
 DIGEST_COMMANDS = {"/news", "новини", "/digest"}
+WEATHER_DIGEST_COMMANDS = {"/weather", "погода", "дайджест", "/today"}
 
 admin_chat_sessions = {}   # user_id -> об'єкт чат-сесії Gemini
 admin_chat_active = {}     # user_id -> bool (чи зараз у режимі чату)
@@ -414,7 +415,8 @@ async def manual(m: types.Message):
         await m.answer(
             "💬 На зв'язку той самий коментатор ринку, що й у дайджесті — з актуальними цифрами.\n"
             "Питайте про ціни, курси, паливо, зерно чи що завгодно ще.\n"
-            "Команди дайджестів («новини») працюють як і раніше.\n"
+            "Команди «новини» (тижневий) і «погода»/«дайджест» (щоденний) працюють як і раніше "
+            "й показують СПРАВЖНІ дайджести, а не розповідь від мене.\n"
             "Щоб щось запам'яталось назавжди (і в чаті, і в завтрашньому дайджесті) — "
             "напишіть «запам'ятай: ...». Переглянути список — «інструкції».\n"
             "Щоб вийти з чату — напишіть «стоп» або /endchat."
@@ -484,6 +486,17 @@ async def manual(m: types.Message):
             await m.answer("⏳ Формую тижневий дайджест новин...")
             from news_digest import build_news_digest
             text = await build_news_digest()
+            await m.answer(text, parse_mode=ParseMode.HTML)
+        except Exception as e:
+            logger.error(f"❌ Помилка: {e}")
+            await m.answer(f"❌ Помилка: {e}")
+        return
+
+    # --- Щоденний дайджест (погода + ринок) — теж працює незалежно від режиму чату ---
+    if text_lower in WEATHER_DIGEST_COMMANDS:
+        try:
+            await m.answer("⏳ Формую щоденний дайджест...")
+            text = await get_weather_forecast()
             await m.answer(text, parse_mode=ParseMode.HTML)
         except Exception as e:
             logger.error(f"❌ Помилка: {e}")
