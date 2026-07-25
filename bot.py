@@ -1,5 +1,6 @@
 import asyncio
 import aiohttp
+import json
 from datetime import datetime, timedelta
 import pytz
 from aiogram import Bot, Dispatcher, types
@@ -39,6 +40,37 @@ dp = Dispatcher()
 ADMIN_ID = 708323174
 CHAT_ID = -1001761937362
 
+# --- Постійні інструкції власника (пам'ять між чатом і щоденним дайджестом) ---
+INSTRUCTIONS_FILE = "custom_instructions.json"
+REMEMBER_PREFIXES = ("запам'ятай:", "запамятай:", "/remember ")
+LIST_INSTRUCTIONS_COMMANDS = {"інструкції", "/instructions", "покажи інструкції"}
+FORGET_ALL_COMMANDS = {"забудь все", "/forgetall"}
+FORGET_PREFIX = "забудь "  # напр. "забудь 2" — видалити інструкцію №2
+
+
+def load_custom_instructions():
+    try:
+        with open(INSTRUCTIONS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def save_custom_instructions(instructions):
+    try:
+        with open(INSTRUCTIONS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(instructions, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"Не вдалось зберегти інструкції: {e}")
+
+
+def format_instructions_block(instructions):
+    """Текстовий блок для вставки в промпт Gemini — і в дайджест, і в чат."""
+    if not instructions:
+        return ""
+    lines = "\n".join(f"- {ins}" for ins in instructions)
+    return f"\nПостійні інструкції власника господарства (обов'язково враховуй їх):\n{lines}\n"
+
 # --- Інтерактивний чат з Gemini (тільки приватно, тільки адмін) ---
 CHAT_ENTER_COMMANDS = {"/chat", "чат", "/gemini"}
 CHAT_EXIT_COMMANDS = {"/endchat", "/stop", "стоп", "вихід", "exit"}
@@ -53,6 +85,7 @@ async def start_new_chat_session(user_id):
     який щодня пише 📌 КОМЕНТАР у дайджесті, а не загальний асистент.
     Підвантажує актуальні ринкові дані, щоб відповіді спирались на реальні цифри."""
     market_data_for_prompt, grain_info = await get_market_data_summary()
+    instructions_block = format_instructions_block(load_custom_instructions())
 
     system_instruction = f"""Ти фінансовий коментатор агроринку України — саме той, хто щодня о 19:00
 пише короткий коментар (📌 КОМЕНТАР) у Telegram-дайджесті птахівничого господарства.
@@ -65,10 +98,12 @@ async def start_new_chat_session(user_id):
 {market_data_for_prompt}
 
 {grain_info or ''}
-
+{instructions_block}
 Відповідай українською, по суті, спираючись на ці реальні дані, коли питання стосується ринку,
 цін, валют, палива чи зерна. На інші теми (не про ринок/птахівництво) відповідай як звичайний
-корисний асистент. Без зайвої води, без вигаданих цифр — якщо даних не вистачає, чесно скажи."""
+корисний асистент. Без зайвої води, без вигаданих цифр — якщо даних не вистачає, чесно скажи.
+Якщо власник просить щось запам'ятати на майбутнє — підкажи, що для цього є команда
+"запам'ятай: ..." (тоді це збережеться і застосовуватиметься автоматично)."""
 
     session = client.chats.create(
         model="gemini-2.5-flash-lite",
@@ -183,15 +218,19 @@ async def get_market_data_summary():
     return market_data_for_prompt, grain_info
 
 
-def build_market_commentator_prompt(market_data_for_prompt):
+def build_market_commentator_prompt(market_data_for_prompt, weather_summary="", instructions_block=""):
+    weather_block = f"\nПогода на завтра по регіонах:\n{weather_summary}\n" if weather_summary else ""
     return f"""Ти фінансовий коментатор агроринку України.
-Тобі надані зміни цін за сьогодні: курси валют, паливо, зерно, куряче філе, філе індички, яйця.
+Тобі надані зміни цін за сьогодні: курси валют, паливо, зерно, куряче філе, філе індички, яйця,
+а також прогноз погоди на завтра.
 
 Важливо: якщо курс USD або EUR до гривні зріс — це означає що гривня ослабла. Якщо впав — гривня зміцніла.
 
 {market_data_for_prompt}
-
-Напиши ОДНЕ речення — що є найважливішим рухом або трендом сьогодні.
+{weather_block}{instructions_block}
+Напиши ОДНЕ речення — що є найважливішим рухом, трендом або погодним фактором сьогодні
+(згадуй погоду лише якщо вона справді значуща для птахівництва — спека, морози, шторм тощо,
+або якщо власник прямо попросив завжди її враховувати).
 Без цифр, без порад, без звернень типу "рекомендую" або "зверніть увагу".
 Якщо нічого суттєвого — напиши: "Спокійний день, суттєвих рухів немає.\""""
 
@@ -265,11 +304,13 @@ async def get_weather_forecast():
 
     # --- Отримуємо grain context і дані для Gemini ---
     market_data_for_prompt, grain_info = await get_market_data_summary()
+    weather_summary = "\n".join(weather_lines_for_prompt)
+    instructions_block = format_instructions_block(load_custom_instructions())
 
     # --- Gemini: коментар ринку ---
     comment = ""
     try:
-        prompt = build_market_commentator_prompt(market_data_for_prompt)
+        prompt = build_market_commentator_prompt(market_data_for_prompt, weather_summary, instructions_block)
 
         resp = client.models.generate_content(
             model="gemini-2.5-flash-lite",
@@ -374,7 +415,9 @@ async def manual(m: types.Message):
             "💬 На зв'язку той самий коментатор ринку, що й у дайджесті — з актуальними цифрами.\n"
             "Питайте про ціни, курси, паливо, зерно чи що завгодно ще.\n"
             "Команди дайджестів («новини») працюють як і раніше.\n"
-            "Щоб вийти — напишіть «стоп» або /endchat."
+            "Щоб щось запам'яталось назавжди (і в чаті, і в завтрашньому дайджесті) — "
+            "напишіть «запам'ятай: ...». Переглянути список — «інструкції».\n"
+            "Щоб вийти з чату — напишіть «стоп» або /endchat."
         )
         return
 
@@ -386,6 +429,53 @@ async def manual(m: types.Message):
             await m.answer("✅ Чат з Gemini завершено. Повернувся до звичайного режиму.")
         else:
             await m.answer("Чат і так не був активний.")
+        return
+
+    # --- Керування постійними інструкціями (працює завжди, незалежно від режиму) ---
+    if text_lower.startswith(REMEMBER_PREFIXES):
+        for prefix in REMEMBER_PREFIXES:
+            if text_lower.startswith(prefix):
+                new_instruction = text_raw[len(prefix):].strip()
+                break
+        if not new_instruction:
+            await m.answer("Напишіть текст інструкції після «запам'ятай:», наприклад:\n«запам'ятай: завжди згадуй погоду в коментарі»")
+            return
+        instructions = load_custom_instructions()
+        instructions.append(new_instruction)
+        save_custom_instructions(instructions)
+        # Якщо чат зараз активний — оновлюємо сесію, щоб інструкція подіяла одразу
+        if admin_chat_active.get(m.from_user.id):
+            await start_new_chat_session(m.from_user.id)
+        await m.answer(f"✅ Запам'ятав: «{new_instruction}»\nЗастосовуватиметься і в дайджесті, і в чаті.")
+        return
+
+    if text_lower in LIST_INSTRUCTIONS_COMMANDS:
+        instructions = load_custom_instructions()
+        if not instructions:
+            await m.answer("Поки що немає жодної збереженої інструкції.")
+        else:
+            listing = "\n".join(f"{i+1}. {ins}" for i, ins in enumerate(instructions))
+            await m.answer(f"📋 Збережені інструкції:\n{listing}\n\nЩоб видалити — напишіть «забудь N» або «забудь все».")
+        return
+
+    if text_lower in FORGET_ALL_COMMANDS:
+        save_custom_instructions([])
+        if admin_chat_active.get(m.from_user.id):
+            await start_new_chat_session(m.from_user.id)
+        await m.answer("🗑 Усі інструкції видалено.")
+        return
+
+    if text_lower.startswith(FORGET_PREFIX):
+        num_part = text_lower[len(FORGET_PREFIX):].strip()
+        instructions = load_custom_instructions()
+        if num_part.isdigit() and 1 <= int(num_part) <= len(instructions):
+            removed = instructions.pop(int(num_part) - 1)
+            save_custom_instructions(instructions)
+            if admin_chat_active.get(m.from_user.id):
+                await start_new_chat_session(m.from_user.id)
+            await m.answer(f"🗑 Видалив: «{removed}»")
+        else:
+            await m.answer("Вкажіть правильний номер інструкції (див. «інструкції»).")
         return
 
     # --- Тижневий дайджест новин (працює незалежно від режиму чату) ---
