@@ -44,21 +44,36 @@ CHAT_ENTER_COMMANDS = {"/chat", "чат", "/gemini"}
 CHAT_EXIT_COMMANDS = {"/endchat", "/stop", "стоп", "вихід", "exit"}
 DIGEST_COMMANDS = {"/news", "новини", "/digest"}
 
-CHAT_SYSTEM_PROMPT = (
-    "Ти корисний AI-асистент українською мовою, вбудований у Telegram-бота "
-    "птахівничого господарства. Відповідай стисло, по суті, без зайвої води."
-)
-
 admin_chat_sessions = {}   # user_id -> об'єкт чат-сесії Gemini
 admin_chat_active = {}     # user_id -> bool (чи зараз у режимі чату)
 
 
-def start_new_chat_session(user_id):
-    """Створює нову чат-сесію Gemini (з чистою пам'яттю) для адміна."""
+async def start_new_chat_session(user_id):
+    """Створює нову чат-сесію Gemini — САМЕ ТОЙ фінансовий коментатор ринку,
+    який щодня пише 📌 КОМЕНТАР у дайджесті, а не загальний асистент.
+    Підвантажує актуальні ринкові дані, щоб відповіді спирались на реальні цифри."""
+    market_data_for_prompt, grain_info = await get_market_data_summary()
+
+    system_instruction = f"""Ти фінансовий коментатор агроринку України — саме той, хто щодня о 19:00
+пише короткий коментар (📌 КОМЕНТАР) у Telegram-дайджесті птахівничого господарства.
+Зараз з тобою спілкується власник господарства напряму, в чаті.
+
+Важливо: якщо курс USD або EUR до гривні зріс — гривня ослабла. Якщо впав — гривня зміцніла.
+
+Ось актуальні ринкові дані на сьогодні:
+
+{market_data_for_prompt}
+
+{grain_info or ''}
+
+Відповідай українською, по суті, спираючись на ці реальні дані, коли питання стосується ринку,
+цін, валют, палива чи зерна. На інші теми (не про ринок/птахівництво) відповідай як звичайний
+корисний асистент. Без зайвої води, без вигаданих цифр — якщо даних не вистачає, чесно скажи."""
+
     session = client.chats.create(
         model="gemini-2.5-flash-lite",
         config=genai_types.GenerateContentConfig(
-            system_instruction=CHAT_SYSTEM_PROMPT
+            system_instruction=system_instruction
         )
     )
     admin_chat_sessions[user_id] = session
@@ -69,7 +84,7 @@ async def ask_gemini_chat(user_id, text):
     """Надсилає повідомлення в поточну чат-сесію адміна і повертає відповідь."""
     session = admin_chat_sessions.get(user_id)
     if session is None:
-        session = start_new_chat_session(user_id)
+        session = await start_new_chat_session(user_id)
 
     def _send():
         return session.send_message(text)
@@ -96,6 +111,89 @@ ICONS = {
     "туман": "🌫️", "серпанок": "🌫️", "димка": "🌫️",
     "гроза": "⛈️", "шторм": "⛈️", "гроза з дощем": "⛈️"
 }
+
+
+async def get_market_data_summary():
+    """Збирає ті самі ринкові дані, що йдуть у щоденний дайджест
+    (курси, паливо, зерно, ціни на продукцію) — використовується і в дайджесті,
+    і для того, щоб чат-персона Gemini бачила ту саму картину ринку."""
+    grain_info = ""
+    market_data_for_prompt = ""
+
+    try:
+        from grain_context import get_grain_context, get_nbu_rates, get_fuel_prices, get_grain_prices
+        from grain_context import load_prev_rates, load_prev_fuel, load_prev_poultry
+
+        async with aiohttp.ClientSession() as session:
+            rates = await get_nbu_rates(session)
+            fuel = await get_fuel_prices(session)
+        grain_prices = get_grain_prices()
+
+        usd = rates.get("USD", 41.5)
+        eur = rates.get("EUR", 0)
+
+        prev_rates = load_prev_rates()
+        prev_fuel = load_prev_fuel()
+        prev_poultry = load_prev_poultry()
+
+        def fmt_change(curr, prev):
+            if prev is None or curr is None:
+                return "без змін"
+            diff = curr - prev
+            if abs(diff) < 0.01:
+                return "без змін"
+            return f"{'зріс' if diff > 0 else 'впав'} на {abs(diff):.2f}"
+
+        wheat_line = next(
+            (f"~${p:.0f}/т, динаміка {ch:+.1f}%"
+             for n, p, ch, _ in grain_prices if "Пшениця" in n and ch is not None),
+            "без змін"
+        )
+        corn_line = next(
+            (f"~${p:.0f}/т, динаміка {ch:+.1f}%"
+             for n, p, ch, _ in grain_prices if "Кукурудза" in n and ch is not None),
+            "без змін"
+        )
+
+        market_data_for_prompt = f"""Зміни цін сьогодні:
+
+Курси НБУ (підвищення курсу = гривня слабшає):
+- USD: {usd:.2f} грн ({fmt_change(usd, prev_rates.get('USD'))})
+- EUR: {eur:.2f} грн ({fmt_change(eur, prev_rates.get('EUR'))})
+
+Паливо (УкрНафта):
+- А-95: {fuel.get('A95', '–')} грн ({fmt_change(fuel.get('A95'), prev_fuel.get('A95'))})
+- Дизель: {fuel.get('ДП', '–')} грн ({fmt_change(fuel.get('ДП'), prev_fuel.get('ДП'))})
+
+Зерно (CME):
+- Пшениця: {wheat_line}
+- Кукурудза: {corn_line}
+
+Продукція птахівництва (Novus):
+- Куряче філе: {fmt_change(prev_poultry.get('chicken_fillet'), prev_poultry.get('chicken_fillet'))}
+- Філе індички: {fmt_change(prev_poultry.get('turkey_fillet'), prev_poultry.get('turkey_fillet'))}
+- Яйця С0 10шт: {fmt_change(prev_poultry.get('eggs_10'), prev_poultry.get('eggs_10'))}"""
+
+        grain_info = await get_grain_context()
+        logger.info("✅ Grain context отримано")
+
+    except Exception as e:
+        logger.warning(f"Grain context failed: {e}")
+
+    return market_data_for_prompt, grain_info
+
+
+def build_market_commentator_prompt(market_data_for_prompt):
+    return f"""Ти фінансовий коментатор агроринку України.
+Тобі надані зміни цін за сьогодні: курси валют, паливо, зерно, куряче філе, філе індички, яйця.
+
+Важливо: якщо курс USD або EUR до гривні зріс — це означає що гривня ослабла. Якщо впав — гривня зміцніла.
+
+{market_data_for_prompt}
+
+Напиши ОДНЕ речення — що є найважливішим рухом або трендом сьогодні.
+Без цифр, без порад, без звернень типу "рекомендую" або "зверніть увагу".
+Якщо нічого суттєвого — напиши: "Спокійний день, суттєвих рухів немає.\""""
 
 
 async def get_weather_forecast():
@@ -166,82 +264,12 @@ async def get_weather_forecast():
                 report += f"❌ <code>{c['name'].ljust(18)} помилка</code>\n"
 
     # --- Отримуємо grain context і дані для Gemini ---
-    grain_info = ""
-    market_data_for_prompt = ""
-
-    try:
-        from grain_context import get_grain_context, get_nbu_rates, get_fuel_prices, get_grain_prices
-        from grain_context import load_prev_rates, load_prev_fuel, load_prev_poultry
-
-        async with aiohttp.ClientSession() as session:
-            rates = await get_nbu_rates(session)
-            fuel = await get_fuel_prices(session)
-        grain_prices = get_grain_prices()
-
-        usd = rates.get("USD", 41.5)
-        eur = rates.get("EUR", 0)
-
-        prev_rates = load_prev_rates()
-        prev_fuel = load_prev_fuel()
-        prev_poultry = load_prev_poultry()
-
-        def fmt_change(curr, prev):
-            if prev is None or curr is None:
-                return "без змін"
-            diff = curr - prev
-            if abs(diff) < 0.01:
-                return "без змін"
-            return f"{'зріс' if diff > 0 else 'впав'} на {abs(diff):.2f}"
-
-        wheat_line = next(
-            (f"~${p:.0f}/т, динаміка {ch:+.1f}%"
-             for n, p, ch, _ in grain_prices if "Пшениця" in n and ch is not None),
-            "без змін"
-        )
-        corn_line = next(
-            (f"~${p:.0f}/т, динаміка {ch:+.1f}%"
-             for n, p, ch, _ in grain_prices if "Кукурудза" in n and ch is not None),
-            "без змін"
-        )
-
-        market_data_for_prompt = f"""Зміни цін сьогодні:
-
-Курси НБУ (підвищення курсу = гривня слабшає):
-- USD: {usd:.2f} грн ({fmt_change(usd, prev_rates.get('USD'))})
-- EUR: {eur:.2f} грн ({fmt_change(eur, prev_rates.get('EUR'))})
-
-Паливо (УкрНафта):
-- А-95: {fuel.get('A95', '–')} грн ({fmt_change(fuel.get('A95'), prev_fuel.get('A95'))})
-- Дизель: {fuel.get('ДП', '–')} грн ({fmt_change(fuel.get('ДП'), prev_fuel.get('ДП'))})
-
-Зерно (CME):
-- Пшениця: {wheat_line}
-- Кукурудза: {corn_line}
-
-Продукція птахівництва (Novus):
-- Куряче філе: {fmt_change(prev_poultry.get('chicken_fillet'), prev_poultry.get('chicken_fillet'))}
-- Філе індички: {fmt_change(prev_poultry.get('turkey_fillet'), prev_poultry.get('turkey_fillet'))}
-- Яйця С0 10шт: {fmt_change(prev_poultry.get('eggs_10'), prev_poultry.get('eggs_10'))}"""
-
-        grain_info = await get_grain_context()
-        logger.info("✅ Grain context отримано")
-
-    except Exception as e:
-        logger.warning(f"Grain context failed: {e}")
+    market_data_for_prompt, grain_info = await get_market_data_summary()
 
     # --- Gemini: коментар ринку ---
     comment = ""
     try:
-        prompt = f"""Ти фінансовий коментатор агроринку України.
-Тобі надані зміни цін за сьогодні: курси валют, паливо, зерно, куряче філе, філе індички, яйця.
-
-Важливо: якщо курс USD або EUR до гривні зріс — це означає що гривня ослабла. Якщо впав — гривня зміцніла.
-
-{market_data_for_prompt}
-
-Напиши ОДНЕ речення — що є найважливішим рухом або трендом сьогодні.
-Без цифр, без порад, без звернень типу "рекомендую" або "зверніть увагу".
-Якщо нічого суттєвого — напиши: "Спокійний день, суттєвих рухів немає.\""""
+        prompt = build_market_commentator_prompt(market_data_for_prompt)
 
         resp = client.models.generate_content(
             model="gemini-2.5-flash-lite",
@@ -339,11 +367,12 @@ async def manual(m: types.Message):
         if not is_private:
             await m.answer("💬 Режим чату доступний тільки в приватних повідомленнях боту.")
             return
-        start_new_chat_session(m.from_user.id)
+        await m.answer("⏳ Підключаюсь до ринкових даних...")
+        await start_new_chat_session(m.from_user.id)
         admin_chat_active[m.from_user.id] = True
         await m.answer(
-            "💬 Режим чату з Gemini увімкнено.\n"
-            "Пишіть будь-що — відповідатиму з пам'яттю розмови.\n"
+            "💬 На зв'язку той самий коментатор ринку, що й у дайджесті — з актуальними цифрами.\n"
+            "Питайте про ціни, курси, паливо, зерно чи що завгодно ще.\n"
             "Команди дайджестів («новини») працюють як і раніше.\n"
             "Щоб вийти — напишіть «стоп» або /endchat."
         )
