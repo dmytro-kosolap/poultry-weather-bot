@@ -5,6 +5,7 @@ import pytz
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from google import genai
+from google.genai import types as genai_types
 import logging
 import os
 from dotenv import load_dotenv
@@ -37,6 +38,51 @@ dp = Dispatcher()
 
 ADMIN_ID = 708323174
 CHAT_ID = -1001761937362
+
+# --- Інтерактивний чат з Gemini (тільки приватно, тільки адмін) ---
+CHAT_ENTER_COMMANDS = {"/chat", "чат", "/gemini"}
+CHAT_EXIT_COMMANDS = {"/endchat", "/stop", "стоп", "вихід", "exit"}
+DIGEST_COMMANDS = {"/news", "новини", "/digest"}
+
+CHAT_SYSTEM_PROMPT = (
+    "Ти корисний AI-асистент українською мовою, вбудований у Telegram-бота "
+    "птахівничого господарства. Відповідай стисло, по суті, без зайвої води."
+)
+
+admin_chat_sessions = {}   # user_id -> об'єкт чат-сесії Gemini
+admin_chat_active = {}     # user_id -> bool (чи зараз у режимі чату)
+
+
+def start_new_chat_session(user_id):
+    """Створює нову чат-сесію Gemini (з чистою пам'яттю) для адміна."""
+    session = client.chats.create(
+        model="gemini-2.5-flash-lite",
+        config=genai_types.GenerateContentConfig(
+            system_instruction=CHAT_SYSTEM_PROMPT
+        )
+    )
+    admin_chat_sessions[user_id] = session
+    return session
+
+
+async def ask_gemini_chat(user_id, text):
+    """Надсилає повідомлення в поточну чат-сесію адміна і повертає відповідь."""
+    session = admin_chat_sessions.get(user_id)
+    if session is None:
+        session = start_new_chat_session(user_id)
+
+    def _send():
+        return session.send_message(text)
+
+    response = await asyncio.to_thread(_send)
+    return response.text.strip() if response and response.text else None
+
+
+async def send_long_message(m: types.Message, text: str, chunk_size: int = 3800):
+    """Telegram обмежує повідомлення ~4096 символів — ріжемо довгі відповіді Gemini."""
+    for i in range(0, len(text), chunk_size):
+        await m.answer(text[i:i + chunk_size])
+
 
 ICONS = {
     "ясно": "☀️", "ясне": "☀️", "сонячно": "☀️", "чисте небо": "☀️",
@@ -282,9 +328,39 @@ async def manual(m: types.Message):
         logger.warning(f"❌ Спроба від {m.from_user.id}")
         return
 
+    text_raw = (m.text or "").strip()
+    text_lower = text_raw.lower()
+    is_private = m.chat.type == "private"
+
     logger.info(f"👤 Адмін: '{m.text}'")
 
-    if m.text and m.text.strip().lower() in ["/news", "новини", "/digest"]:
+    # --- Вхід у режим чату з Gemini (тільки в приватних повідомленнях) ---
+    if text_lower in CHAT_ENTER_COMMANDS:
+        if not is_private:
+            await m.answer("💬 Режим чату доступний тільки в приватних повідомленнях боту.")
+            return
+        start_new_chat_session(m.from_user.id)
+        admin_chat_active[m.from_user.id] = True
+        await m.answer(
+            "💬 Режим чату з Gemini увімкнено.\n"
+            "Пишіть будь-що — відповідатиму з пам'яттю розмови.\n"
+            "Команди дайджестів («новини») працюють як і раніше.\n"
+            "Щоб вийти — напишіть «стоп» або /endchat."
+        )
+        return
+
+    # --- Вихід з режиму чату ---
+    if text_lower in CHAT_EXIT_COMMANDS:
+        if admin_chat_active.get(m.from_user.id):
+            admin_chat_active[m.from_user.id] = False
+            admin_chat_sessions.pop(m.from_user.id, None)
+            await m.answer("✅ Чат з Gemini завершено. Повернувся до звичайного режиму.")
+        else:
+            await m.answer("Чат і так не був активний.")
+        return
+
+    # --- Тижневий дайджест новин (працює незалежно від режиму чату) ---
+    if text_lower in DIGEST_COMMANDS:
         try:
             await m.answer("⏳ Формую тижневий дайджест новин...")
             from news_digest import build_news_digest
@@ -295,6 +371,24 @@ async def manual(m: types.Message):
             await m.answer(f"❌ Помилка: {e}")
         return
 
+    # --- Якщо адмін зараз у режимі чату — усе інше йде в Gemini ---
+    if admin_chat_active.get(m.from_user.id) and is_private:
+        if not text_raw:
+            await m.answer("Надішліть текстове повідомлення.")
+            return
+        try:
+            await bot.send_chat_action(m.chat.id, "typing")
+            reply = await ask_gemini_chat(m.from_user.id, text_raw)
+            if reply:
+                await send_long_message(m, reply)
+            else:
+                await m.answer("❌ Gemini не відповів. Спробуйте ще раз.")
+        except Exception as e:
+            logger.error(f"❌ Помилка чату Gemini: {e}")
+            await m.answer(f"❌ Помилка чату: {e}")
+        return
+
+    # --- Звичайна поведінка поза чатом: будь-яке інше повідомлення = погода ---
     try:
         text = await get_weather_forecast()
         await m.answer(text, parse_mode=ParseMode.HTML)
@@ -307,6 +401,7 @@ async def main():
     logger.info("🚀 БОТ ЗАПУЩЕНО")
     logger.info(f"⏰ Щоденний дайджест: 19:00")
     logger.info(f"📰 Тижневий дайджест новин: П'ятниця 09:00")
+    logger.info(f"💬 Чат з Gemini: /chat (вихід — /endchat)")
     logger.info(f"👤 ADMIN_ID: {ADMIN_ID}")
 
     asyncio.create_task(daily_task())
