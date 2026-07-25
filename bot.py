@@ -1,12 +1,10 @@
 import asyncio
 import aiohttp
-import json
 from datetime import datetime, timedelta
 import pytz
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from google import genai
-from google.genai import types as genai_types
 import logging
 import os
 from dotenv import load_dotenv
@@ -40,101 +38,6 @@ dp = Dispatcher()
 ADMIN_ID = 708323174
 CHAT_ID = -1001761937362
 
-# --- Постійні інструкції власника (пам'ять між чатом і щоденним дайджестом) ---
-INSTRUCTIONS_FILE = "custom_instructions.json"
-REMEMBER_PREFIXES = ("запам'ятай:", "запамятай:", "/remember ")
-LIST_INSTRUCTIONS_COMMANDS = {"інструкції", "/instructions", "покажи інструкції"}
-FORGET_ALL_COMMANDS = {"забудь все", "/forgetall"}
-FORGET_PREFIX = "забудь "  # напр. "забудь 2" — видалити інструкцію №2
-
-
-def load_custom_instructions():
-    try:
-        with open(INSTRUCTIONS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return []
-
-
-def save_custom_instructions(instructions):
-    try:
-        with open(INSTRUCTIONS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(instructions, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.warning(f"Не вдалось зберегти інструкції: {e}")
-
-
-def format_instructions_block(instructions):
-    """Текстовий блок для вставки в промпт Gemini — і в дайджест, і в чат."""
-    if not instructions:
-        return ""
-    lines = "\n".join(f"- {ins}" for ins in instructions)
-    return f"\nПостійні інструкції власника господарства (обов'язково враховуй їх):\n{lines}\n"
-
-# --- Інтерактивний чат з Gemini (тільки приватно, тільки адмін) ---
-CHAT_ENTER_COMMANDS = {"/chat", "чат", "/gemini"}
-CHAT_EXIT_COMMANDS = {"/endchat", "/stop", "стоп", "вихід", "exit"}
-DIGEST_COMMANDS = {"/news", "новини", "/digest"}
-WEATHER_DIGEST_COMMANDS = {"/weather", "погода", "дайджест", "/today"}
-
-admin_chat_sessions = {}   # user_id -> об'єкт чат-сесії Gemini
-admin_chat_active = {}     # user_id -> bool (чи зараз у режимі чату)
-
-
-async def start_new_chat_session(user_id):
-    """Створює нову чат-сесію Gemini — САМЕ ТОЙ фінансовий коментатор ринку,
-    який щодня пише 📌 КОМЕНТАР у дайджесті, а не загальний асистент.
-    Підвантажує актуальні ринкові дані, щоб відповіді спирались на реальні цифри."""
-    market_data_for_prompt, grain_info = await get_market_data_summary()
-    instructions_block = format_instructions_block(load_custom_instructions())
-
-    system_instruction = f"""Ти фінансовий коментатор агроринку України — саме той, хто щодня о 19:00
-пише короткий коментар (📌 КОМЕНТАР) у Telegram-дайджесті птахівничого господарства.
-Зараз з тобою спілкується власник господарства напряму, в чаті.
-
-Важливо: якщо курс USD або EUR до гривні зріс — гривня ослабла. Якщо впав — гривня зміцніла.
-
-Ось актуальні ринкові дані на сьогодні:
-
-{market_data_for_prompt}
-
-{grain_info or ''}
-{instructions_block}
-Відповідай українською, по суті, спираючись на ці реальні дані, коли питання стосується ринку,
-цін, валют, палива чи зерна. На інші теми (не про ринок/птахівництво) відповідай як звичайний
-корисний асистент. Без зайвої води, без вигаданих цифр — якщо даних не вистачає, чесно скажи.
-Якщо власник просить щось запам'ятати на майбутнє — підкажи, що для цього є команда
-"запам'ятай: ..." (тоді це збережеться і застосовуватиметься автоматично)."""
-
-    session = client.chats.create(
-        model="gemini-2.5-flash-lite",
-        config=genai_types.GenerateContentConfig(
-            system_instruction=system_instruction
-        )
-    )
-    admin_chat_sessions[user_id] = session
-    return session
-
-
-async def ask_gemini_chat(user_id, text):
-    """Надсилає повідомлення в поточну чат-сесію адміна і повертає відповідь."""
-    session = admin_chat_sessions.get(user_id)
-    if session is None:
-        session = await start_new_chat_session(user_id)
-
-    def _send():
-        return session.send_message(text)
-
-    response = await asyncio.to_thread(_send)
-    return response.text.strip() if response and response.text else None
-
-
-async def send_long_message(m: types.Message, text: str, chunk_size: int = 3800):
-    """Telegram обмежує повідомлення ~4096 символів — ріжемо довгі відповіді Gemini."""
-    for i in range(0, len(text), chunk_size):
-        await m.answer(text[i:i + chunk_size])
-
-
 ICONS = {
     "ясно": "☀️", "ясне": "☀️", "сонячно": "☀️", "чисте небо": "☀️",
     "хмарно": "☁️", "похмуро": "☁️", "суцільна хмарність": "☁️",
@@ -147,93 +50,6 @@ ICONS = {
     "туман": "🌫️", "серпанок": "🌫️", "димка": "🌫️",
     "гроза": "⛈️", "шторм": "⛈️", "гроза з дощем": "⛈️"
 }
-
-
-async def get_market_data_summary():
-    """Збирає ті самі ринкові дані, що йдуть у щоденний дайджест
-    (курси, паливо, зерно, ціни на продукцію) — використовується і в дайджесті,
-    і для того, щоб чат-персона Gemini бачила ту саму картину ринку."""
-    grain_info = ""
-    market_data_for_prompt = ""
-
-    try:
-        from grain_context import get_grain_context, get_nbu_rates, get_fuel_prices, get_grain_prices
-        from grain_context import load_prev_rates, load_prev_fuel, load_prev_poultry
-
-        async with aiohttp.ClientSession() as session:
-            rates = await get_nbu_rates(session)
-            fuel = await get_fuel_prices(session)
-        grain_prices = get_grain_prices()
-
-        usd = rates.get("USD", 41.5)
-        eur = rates.get("EUR", 0)
-
-        prev_rates = load_prev_rates()
-        prev_fuel = load_prev_fuel()
-        prev_poultry = load_prev_poultry()
-
-        def fmt_change(curr, prev):
-            if prev is None or curr is None:
-                return "без змін"
-            diff = curr - prev
-            if abs(diff) < 0.01:
-                return "без змін"
-            return f"{'зріс' if diff > 0 else 'впав'} на {abs(diff):.2f}"
-
-        wheat_line = next(
-            (f"~${p:.0f}/т, динаміка {ch:+.1f}%"
-             for n, p, ch, _ in grain_prices if "Пшениця" in n and ch is not None),
-            "без змін"
-        )
-        corn_line = next(
-            (f"~${p:.0f}/т, динаміка {ch:+.1f}%"
-             for n, p, ch, _ in grain_prices if "Кукурудза" in n and ch is not None),
-            "без змін"
-        )
-
-        market_data_for_prompt = f"""Зміни цін сьогодні:
-
-Курси НБУ (підвищення курсу = гривня слабшає):
-- USD: {usd:.2f} грн ({fmt_change(usd, prev_rates.get('USD'))})
-- EUR: {eur:.2f} грн ({fmt_change(eur, prev_rates.get('EUR'))})
-
-Паливо (УкрНафта):
-- А-95: {fuel.get('A95', '–')} грн ({fmt_change(fuel.get('A95'), prev_fuel.get('A95'))})
-- Дизель: {fuel.get('ДП', '–')} грн ({fmt_change(fuel.get('ДП'), prev_fuel.get('ДП'))})
-
-Зерно (CME):
-- Пшениця: {wheat_line}
-- Кукурудза: {corn_line}
-
-Продукція птахівництва (Novus):
-- Куряче філе: {fmt_change(prev_poultry.get('chicken_fillet'), prev_poultry.get('chicken_fillet'))}
-- Філе індички: {fmt_change(prev_poultry.get('turkey_fillet'), prev_poultry.get('turkey_fillet'))}
-- Яйця С0 10шт: {fmt_change(prev_poultry.get('eggs_10'), prev_poultry.get('eggs_10'))}"""
-
-        grain_info = await get_grain_context()
-        logger.info("✅ Grain context отримано")
-
-    except Exception as e:
-        logger.warning(f"Grain context failed: {e}")
-
-    return market_data_for_prompt, grain_info
-
-
-def build_market_commentator_prompt(market_data_for_prompt, weather_summary="", instructions_block=""):
-    weather_block = f"\nПогода на завтра по регіонах:\n{weather_summary}\n" if weather_summary else ""
-    return f"""Ти фінансовий коментатор агроринку України.
-Тобі надані зміни цін за сьогодні: курси валют, паливо, зерно, куряче філе, філе індички, яйця,
-а також прогноз погоди на завтра.
-
-Важливо: якщо курс USD або EUR до гривні зріс — це означає що гривня ослабла. Якщо впав — гривня зміцніла.
-
-{market_data_for_prompt}
-{weather_block}{instructions_block}
-Напиши ОДНЕ речення — що є найважливішим рухом, трендом або погодним фактором сьогодні
-(згадуй погоду лише якщо вона справді значуща для птахівництва — спека, морози, шторм тощо,
-або якщо власник прямо попросив завжди її враховувати).
-Без цифр, без порад, без звернень типу "рекомендую" або "зверніть увагу".
-Якщо нічого суттєвого — напиши: "Спокійний день, суттєвих рухів немає.\""""
 
 
 async def get_weather_forecast():
@@ -304,14 +120,82 @@ async def get_weather_forecast():
                 report += f"❌ <code>{c['name'].ljust(18)} помилка</code>\n"
 
     # --- Отримуємо grain context і дані для Gemini ---
-    market_data_for_prompt, grain_info = await get_market_data_summary()
-    weather_summary = "\n".join(weather_lines_for_prompt)
-    instructions_block = format_instructions_block(load_custom_instructions())
+    grain_info = ""
+    market_data_for_prompt = ""
+
+    try:
+        from grain_context import get_grain_context, get_nbu_rates, get_fuel_prices, get_grain_prices
+        from grain_context import load_prev_rates, load_prev_fuel, load_prev_poultry
+
+        async with aiohttp.ClientSession() as session:
+            rates = await get_nbu_rates(session)
+            fuel = await get_fuel_prices(session)
+        grain_prices = get_grain_prices()
+
+        usd = rates.get("USD", 41.5)
+        eur = rates.get("EUR", 0)
+
+        prev_rates = load_prev_rates()
+        prev_fuel = load_prev_fuel()
+        prev_poultry = load_prev_poultry()
+
+        def fmt_change(curr, prev):
+            if prev is None or curr is None:
+                return "без змін"
+            diff = curr - prev
+            if abs(diff) < 0.01:
+                return "без змін"
+            return f"{'зріс' if diff > 0 else 'впав'} на {abs(diff):.2f}"
+
+        wheat_line = next(
+            (f"~${p:.0f}/т, динаміка {ch:+.1f}%"
+             for n, p, ch, _ in grain_prices if "Пшениця" in n and ch is not None),
+            "без змін"
+        )
+        corn_line = next(
+            (f"~${p:.0f}/т, динаміка {ch:+.1f}%"
+             for n, p, ch, _ in grain_prices if "Кукурудза" in n and ch is not None),
+            "без змін"
+        )
+
+        market_data_for_prompt = f"""Зміни цін сьогодні:
+
+Курси НБУ (підвищення курсу = гривня слабшає):
+- USD: {usd:.2f} грн ({fmt_change(usd, prev_rates.get('USD'))})
+- EUR: {eur:.2f} грн ({fmt_change(eur, prev_rates.get('EUR'))})
+
+Паливо (УкрНафта):
+- А-95: {fuel.get('A95', '–')} грн ({fmt_change(fuel.get('A95'), prev_fuel.get('A95'))})
+- Дизель: {fuel.get('ДП', '–')} грн ({fmt_change(fuel.get('ДП'), prev_fuel.get('ДП'))})
+
+Зерно (CME):
+- Пшениця: {wheat_line}
+- Кукурудза: {corn_line}
+
+Продукція птахівництва (Novus):
+- Куряче філе: {fmt_change(prev_poultry.get('chicken_fillet'), prev_poultry.get('chicken_fillet'))}
+- Філе індички: {fmt_change(prev_poultry.get('turkey_fillet'), prev_poultry.get('turkey_fillet'))}
+- Яйця С0 10шт: {fmt_change(prev_poultry.get('eggs_10'), prev_poultry.get('eggs_10'))}"""
+
+        grain_info = await get_grain_context()
+        logger.info("✅ Grain context отримано")
+
+    except Exception as e:
+        logger.warning(f"Grain context failed: {e}")
 
     # --- Gemini: коментар ринку ---
     comment = ""
     try:
-        prompt = build_market_commentator_prompt(market_data_for_prompt, weather_summary, instructions_block)
+        prompt = f"""Ти фінансовий коментатор агроринку України.
+Тобі надані зміни цін за сьогодні: курси валют, паливо, зерно, куряче філе, філе індички, яйця.
+
+Важливо: якщо курс USD або EUR до гривні зріс — це означає що гривня ослабла. Якщо впав — гривня зміцніла.
+
+{market_data_for_prompt}
+
+Напиши ОДНЕ речення — що є найважливішим рухом або трендом сьогодні.
+Без цифр, без порад, без звернень типу "рекомендую" або "зверніть увагу".
+Якщо нічого суттєвого — напиши: "Спокійний день, суттєвих рухів немає.\""""
 
         resp = client.models.generate_content(
             model="gemini-2.5-flash-lite",
@@ -398,90 +282,9 @@ async def manual(m: types.Message):
         logger.warning(f"❌ Спроба від {m.from_user.id}")
         return
 
-    text_raw = (m.text or "").strip()
-    text_lower = text_raw.lower()
-    is_private = m.chat.type == "private"
-
     logger.info(f"👤 Адмін: '{m.text}'")
 
-    # --- Вхід у режим чату з Gemini (тільки в приватних повідомленнях) ---
-    if text_lower in CHAT_ENTER_COMMANDS:
-        if not is_private:
-            await m.answer("💬 Режим чату доступний тільки в приватних повідомленнях боту.")
-            return
-        await m.answer("⏳ Підключаюсь до ринкових даних...")
-        await start_new_chat_session(m.from_user.id)
-        admin_chat_active[m.from_user.id] = True
-        await m.answer(
-            "💬 На зв'язку той самий коментатор ринку, що й у дайджесті — з актуальними цифрами.\n"
-            "Питайте про ціни, курси, паливо, зерно чи що завгодно ще.\n"
-            "Команди «новини» (тижневий) і «погода»/«дайджест» (щоденний) працюють як і раніше "
-            "й показують СПРАВЖНІ дайджести, а не розповідь від мене.\n"
-            "Щоб щось запам'яталось назавжди (і в чаті, і в завтрашньому дайджесті) — "
-            "напишіть «запам'ятай: ...». Переглянути список — «інструкції».\n"
-            "Щоб вийти з чату — напишіть «стоп» або /endchat."
-        )
-        return
-
-    # --- Вихід з режиму чату ---
-    if text_lower in CHAT_EXIT_COMMANDS:
-        if admin_chat_active.get(m.from_user.id):
-            admin_chat_active[m.from_user.id] = False
-            admin_chat_sessions.pop(m.from_user.id, None)
-            await m.answer("✅ Чат з Gemini завершено. Повернувся до звичайного режиму.")
-        else:
-            await m.answer("Чат і так не був активний.")
-        return
-
-    # --- Керування постійними інструкціями (працює завжди, незалежно від режиму) ---
-    if text_lower.startswith(REMEMBER_PREFIXES):
-        for prefix in REMEMBER_PREFIXES:
-            if text_lower.startswith(prefix):
-                new_instruction = text_raw[len(prefix):].strip()
-                break
-        if not new_instruction:
-            await m.answer("Напишіть текст інструкції після «запам'ятай:», наприклад:\n«запам'ятай: завжди згадуй погоду в коментарі»")
-            return
-        instructions = load_custom_instructions()
-        instructions.append(new_instruction)
-        save_custom_instructions(instructions)
-        # Якщо чат зараз активний — оновлюємо сесію, щоб інструкція подіяла одразу
-        if admin_chat_active.get(m.from_user.id):
-            await start_new_chat_session(m.from_user.id)
-        await m.answer(f"✅ Запам'ятав: «{new_instruction}»\nЗастосовуватиметься і в дайджесті, і в чаті.")
-        return
-
-    if text_lower in LIST_INSTRUCTIONS_COMMANDS:
-        instructions = load_custom_instructions()
-        if not instructions:
-            await m.answer("Поки що немає жодної збереженої інструкції.")
-        else:
-            listing = "\n".join(f"{i+1}. {ins}" for i, ins in enumerate(instructions))
-            await m.answer(f"📋 Збережені інструкції:\n{listing}\n\nЩоб видалити — напишіть «забудь N» або «забудь все».")
-        return
-
-    if text_lower in FORGET_ALL_COMMANDS:
-        save_custom_instructions([])
-        if admin_chat_active.get(m.from_user.id):
-            await start_new_chat_session(m.from_user.id)
-        await m.answer("🗑 Усі інструкції видалено.")
-        return
-
-    if text_lower.startswith(FORGET_PREFIX):
-        num_part = text_lower[len(FORGET_PREFIX):].strip()
-        instructions = load_custom_instructions()
-        if num_part.isdigit() and 1 <= int(num_part) <= len(instructions):
-            removed = instructions.pop(int(num_part) - 1)
-            save_custom_instructions(instructions)
-            if admin_chat_active.get(m.from_user.id):
-                await start_new_chat_session(m.from_user.id)
-            await m.answer(f"🗑 Видалив: «{removed}»")
-        else:
-            await m.answer("Вкажіть правильний номер інструкції (див. «інструкції»).")
-        return
-
-    # --- Тижневий дайджест новин (працює незалежно від режиму чату) ---
-    if text_lower in DIGEST_COMMANDS:
+    if m.text and m.text.strip().lower() in ["/news", "новини", "/digest"]:
         try:
             await m.answer("⏳ Формую тижневий дайджест новин...")
             from news_digest import build_news_digest
@@ -492,35 +295,6 @@ async def manual(m: types.Message):
             await m.answer(f"❌ Помилка: {e}")
         return
 
-    # --- Щоденний дайджест (погода + ринок) — теж працює незалежно від режиму чату ---
-    if text_lower in WEATHER_DIGEST_COMMANDS:
-        try:
-            await m.answer("⏳ Формую щоденний дайджест...")
-            text = await get_weather_forecast()
-            await m.answer(text, parse_mode=ParseMode.HTML)
-        except Exception as e:
-            logger.error(f"❌ Помилка: {e}")
-            await m.answer(f"❌ Помилка: {e}")
-        return
-
-    # --- Якщо адмін зараз у режимі чату — усе інше йде в Gemini ---
-    if admin_chat_active.get(m.from_user.id) and is_private:
-        if not text_raw:
-            await m.answer("Надішліть текстове повідомлення.")
-            return
-        try:
-            await bot.send_chat_action(m.chat.id, "typing")
-            reply = await ask_gemini_chat(m.from_user.id, text_raw)
-            if reply:
-                await send_long_message(m, reply)
-            else:
-                await m.answer("❌ Gemini не відповів. Спробуйте ще раз.")
-        except Exception as e:
-            logger.error(f"❌ Помилка чату Gemini: {e}")
-            await m.answer(f"❌ Помилка чату: {e}")
-        return
-
-    # --- Звичайна поведінка поза чатом: будь-яке інше повідомлення = погода ---
     try:
         text = await get_weather_forecast()
         await m.answer(text, parse_mode=ParseMode.HTML)
@@ -533,7 +307,6 @@ async def main():
     logger.info("🚀 БОТ ЗАПУЩЕНО")
     logger.info(f"⏰ Щоденний дайджест: 19:00")
     logger.info(f"📰 Тижневий дайджест новин: П'ятниця 09:00")
-    logger.info(f"💬 Чат з Gemini: /chat (вихід — /endchat)")
     logger.info(f"👤 ADMIN_ID: {ADMIN_ID}")
 
     asyncio.create_task(daily_task())
