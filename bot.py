@@ -51,6 +51,10 @@ ICONS = {
     "гроза": "⛈️", "шторм": "⛈️", "гроза з дощем": "⛈️"
 }
 
+RAIN_KEYWORDS = ["дощ", "злива", "гроза", "мряка"]
+BIG_SWING_THRESHOLD = 15       # °C різниці день/ніч в одному місті — вважаємо суттєвим перепадом
+WIDESPREAD_RAIN_SHARE = 0.6    # частка міст з дощем, щоб вважати це "по всій країні"
+
 
 async def get_weather_forecast():
     cities = [
@@ -90,6 +94,9 @@ async def get_weather_forecast():
     report += "<code>Місто              День | Ніч</code>\n"
 
     weather_lines_for_prompt = []
+    rain_cities_count = 0
+    max_swing = 0
+    max_swing_city = ""
 
     async with aiohttp.ClientSession() as session:
         for c in cities:
@@ -115,9 +122,31 @@ async def get_weather_forecast():
                     weather_lines_for_prompt.append(
                         f"{c['name']}: день {d}°C, ніч {n}°C, {wd}"
                     )
+
+                    if any(k in wd.lower() for k in RAIN_KEYWORDS):
+                        rain_cities_count += 1
+
+                    swing = d - n
+                    if swing > max_swing:
+                        max_swing = swing
+                        max_swing_city = c["name"]
             except Exception as e:
                 logger.error(f"Помилка {c['name']}: {e}")
                 report += f"❌ <code>{c['name'].ljust(18)} помилка</code>\n"
+
+    # --- Погодні сигнали для коментатора (тільки якщо є щось суттєве) ---
+    weather_flags = []
+    if cities and (rain_cities_count / len(cities)) >= WIDESPREAD_RAIN_SHARE:
+        weather_flags.append(
+            f"Дощ/злива/гроза прогнозується у {rain_cities_count} з {len(cities)} міст — по суті, по всій країні."
+        )
+    if max_swing >= BIG_SWING_THRESHOLD:
+        weather_flags.append(
+            f"Значний перепад температур день/ніч у {max_swing_city}: {max_swing}°C — це суттєвий тепловий стрес для птиці."
+        )
+
+    weather_summary_for_prompt = "\n".join(weather_lines_for_prompt)
+    weather_flags_text = "\n".join(weather_flags)
 
     # --- Отримуємо grain context і дані для Gemini ---
     grain_info = ""
@@ -183,19 +212,33 @@ async def get_weather_forecast():
     except Exception as e:
         logger.warning(f"Grain context failed: {e}")
 
-    # --- Gemini: коментар ринку ---
+    # --- Gemini: коментар ринку (тепер враховує й погоду, якщо є суттєві сигнали) ---
     comment = ""
     try:
+        weather_block = ""
+        if weather_flags_text:
+            weather_block = f"""
+
+Погода на завтра — звертай увагу на ці сигнали:
+{weather_flags_text}
+
+Повні дані по містах (для довідки, не перелічуй усі):
+{weather_summary_for_prompt}"""
+
         prompt = f"""Ти фінансовий коментатор агроринку України.
 Тобі надані зміни цін за сьогодні: курси валют, паливо, зерно, куряче філе, філе індички, яйця.
 
 Важливо: якщо курс USD або EUR до гривні зріс — це означає що гривня ослабла. Якщо впав — гривня зміцніла.
 
 {market_data_for_prompt}
+{weather_block}
 
 Напиши ОДНЕ речення — що є найважливішим рухом або трендом сьогодні.
+Якщо є суттєві погодні сигнали вище (значний перепад температур або дощ по всій країні) —
+згадай саме це, бо це прямо впливає на птахівництво (тепловий стрес, вентиляція).
+Якщо погодних сигналів немає — пиши тільки про ринок, не згадуй погоду взагалі.
 Без цифр, без порад, без звернень типу "рекомендую" або "зверніть увагу".
-Якщо нічого суттєвого — напиши: "Спокійний день, суттєвих рухів немає.\""""
+Якщо нічого суттєвого немає ні на ринку, ні в погоді — напиши: "Спокійний день, суттєвих рухів немає.\""""
 
         resp = client.models.generate_content(
             model="gemini-2.5-flash-lite",
