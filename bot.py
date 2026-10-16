@@ -51,6 +51,10 @@ ICONS = {
     "гроза": "⛈️", "шторм": "⛈️", "гроза з дощем": "⛈️"
 }
 
+# Автоматична п'ятнична розсилка новин у групу (True = вмикає, False = вимкнено).
+# Команда "новини" для адміна працює завжди, незалежно від цього прапорця.
+WEEKLY_NEWS_ENABLED = False
+
 RAIN_KEYWORDS = ["дощ", "злива", "гроза", "мряка"]
 BIG_SWING_THRESHOLD = 15       # °C різниці день/ніч в одному місті — вважаємо суттєвим перепадом
 WIDESPREAD_RAIN_SHARE = 0.6    # частка міст з дощем, щоб вважати це "по всій країні"
@@ -349,11 +353,15 @@ async def manual(m: types.Message):
 async def main():
     logger.info("🚀 БОТ ЗАПУЩЕНО")
     logger.info(f"⏰ Щоденний дайджест: 19:00")
-    logger.info(f"📰 Тижневий дайджест новин: П'ятниця 09:00")
+    if WEEKLY_NEWS_ENABLED:
+        logger.info(f"📰 Тижневий дайджест новин: П'ятниця 09:00")
+    else:
+        logger.info("📰 Автоматична розсилка новин ВИМКНЕНА (тільки за командою «новини»)")
     logger.info(f"👤 ADMIN_ID: {ADMIN_ID}")
 
     asyncio.create_task(daily_task())
-    asyncio.create_task(weekly_news_task())
+    if WEEKLY_NEWS_ENABLED:
+        asyncio.create_task(weekly_news_task())
 
     logger.info("✅ Фонові задачі активні!")
     await dp.start_polling(bot)
