@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 import pytz
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
-from google import genai
 import logging
 import os
 from dotenv import load_dotenv
@@ -23,15 +22,13 @@ logger = logging.getLogger(__name__)
 
 TOKEN = os.getenv("BOT_TOKEN")
 WEATHER_KEY = os.getenv("WEATHER_API_KEY")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
-if not all([TOKEN, WEATHER_KEY, GEMINI_KEY]):
+if not all([TOKEN, WEATHER_KEY]):
     logger.error("❌ Не знайдено всі ключі в .env!")
     exit(1)
 
 logger.info("✅ Ключі завантажені")
 
-client = genai.Client(api_key=GEMINI_KEY)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
@@ -55,9 +52,6 @@ ICONS = {
 # Команда "новини" для адміна працює завжди, незалежно від цього прапорця.
 WEEKLY_NEWS_ENABLED = False
 
-RAIN_KEYWORDS = ["дощ", "злива", "гроза", "мряка"]
-BIG_SWING_THRESHOLD = 15       # °C різниці день/ніч в одному місті — вважаємо суттєвим перепадом
-WIDESPREAD_RAIN_SHARE = 0.6    # частка міст з дощем, щоб вважати це "по всій країні"
 
 
 async def get_weather_forecast():
@@ -97,11 +91,6 @@ async def get_weather_forecast():
     report += "☁️ <b>ПОГОДА НА ЗАВТРА:</b>\n"
     report += "<code>Місто              День | Ніч</code>\n"
 
-    weather_lines_for_prompt = []
-    rain_cities_count = 0
-    max_swing = 0
-    max_swing_city = ""
-
     async with aiohttp.ClientSession() as session:
         for c in cities:
             url = f"http://api.openweathermap.org/data/2.5/forecast?q={c['eng']}&appid={WEATHER_KEY}&units=metric&lang=uk"
@@ -123,150 +112,23 @@ async def get_weather_forecast():
                     icon = next((ICONS[k] for k in ICONS if k in wd.lower()), "☁️")
                     fmt = lambda t: (f"+{t}" if t > 0 else str(t)).rjust(4)
                     report += f"{icon} <code>{c['name'].ljust(18)} {fmt(d)}° | {fmt(n)}°</code>\n"
-                    weather_lines_for_prompt.append(
-                        f"{c['name']}: день {d}°C, ніч {n}°C, {wd}"
-                    )
-
-                    if any(k in wd.lower() for k in RAIN_KEYWORDS):
-                        rain_cities_count += 1
-
-                    swing = d - n
-                    if swing > max_swing:
-                        max_swing = swing
-                        max_swing_city = c["name"]
             except Exception as e:
                 logger.error(f"Помилка {c['name']}: {e}")
                 report += f"❌ <code>{c['name'].ljust(18)} помилка</code>\n"
 
-    # --- Погодні сигнали для коментатора (тільки якщо є щось суттєве) ---
-    weather_flags = []
-    if cities and (rain_cities_count / len(cities)) >= WIDESPREAD_RAIN_SHARE:
-        weather_flags.append(
-            f"Дощ/злива/гроза прогнозується у {rain_cities_count} з {len(cities)} міст — по суті, по всій країні."
-        )
-    if max_swing >= BIG_SWING_THRESHOLD:
-        weather_flags.append(
-            f"Значний перепад температур день/ніч у {max_swing_city}: {max_swing}°C — це суттєвий тепловий стрес для птиці."
-        )
-
-    weather_summary_for_prompt = "\n".join(weather_lines_for_prompt)
-    weather_flags_text = "\n".join(weather_flags)
-
-    # --- Отримуємо grain context і дані для Gemini ---
+    # --- Ринкові цифри (курси, паливо, зерно, ціни Novus) ---
     grain_info = ""
-    market_data_for_prompt = ""
-
     try:
-        from grain_context import get_grain_context, get_nbu_rates, get_fuel_prices, get_grain_prices
-        from grain_context import load_prev_rates, load_prev_fuel, load_prev_poultry
-
-        async with aiohttp.ClientSession() as session:
-            rates = await get_nbu_rates(session)
-            fuel = await get_fuel_prices(session)
-        grain_prices = get_grain_prices()
-
-        usd = rates.get("USD", 41.5)
-        eur = rates.get("EUR", 0)
-
-        prev_rates = load_prev_rates()
-        prev_fuel = load_prev_fuel()
-        prev_poultry = load_prev_poultry()
-
-        def fmt_change(curr, prev):
-            if prev is None or curr is None:
-                return "без змін"
-            diff = curr - prev
-            if abs(diff) < 0.01:
-                return "без змін"
-            return f"{'зріс' if diff > 0 else 'впав'} на {abs(diff):.2f}"
-
-        wheat_line = next(
-            (f"~${p:.0f}/т, динаміка {ch:+.1f}%"
-             for n, p, ch, _ in grain_prices if "Пшениця" in n and ch is not None),
-            "без змін"
-        )
-        corn_line = next(
-            (f"~${p:.0f}/т, динаміка {ch:+.1f}%"
-             for n, p, ch, _ in grain_prices if "Кукурудза" in n and ch is not None),
-            "без змін"
-        )
-
-        market_data_for_prompt = f"""Зміни цін сьогодні:
-
-Курси НБУ (підвищення курсу = гривня слабшає):
-- USD: {usd:.2f} грн ({fmt_change(usd, prev_rates.get('USD'))})
-- EUR: {eur:.2f} грн ({fmt_change(eur, prev_rates.get('EUR'))})
-
-Паливо (УкрНафта):
-- А-95: {fuel.get('A95', '–')} грн ({fmt_change(fuel.get('A95'), prev_fuel.get('A95'))})
-- Дизель: {fuel.get('ДП', '–')} грн ({fmt_change(fuel.get('ДП'), prev_fuel.get('ДП'))})
-
-Зерно (CME):
-- Пшениця: {wheat_line}
-- Кукурудза: {corn_line}
-
-Продукція птахівництва (Novus):
-- Куряче філе: {fmt_change(prev_poultry.get('chicken_fillet'), prev_poultry.get('chicken_fillet'))}
-- Філе індички: {fmt_change(prev_poultry.get('turkey_fillet'), prev_poultry.get('turkey_fillet'))}
-- Яйця С0 10шт: {fmt_change(prev_poultry.get('eggs_10'), prev_poultry.get('eggs_10'))}"""
-
+        from grain_context import get_grain_context
         grain_info = await get_grain_context()
         logger.info("✅ Grain context отримано")
-
     except Exception as e:
         logger.warning(f"Grain context failed: {e}")
-
-    # --- Gemini: коментар ринку (тепер враховує й погоду, якщо є суттєві сигнали) ---
-    comment = ""
-    try:
-        weather_block = ""
-        if weather_flags_text:
-            weather_block = f"""
-
-Погода на завтра — звертай увагу на ці сигнали:
-{weather_flags_text}
-
-Повні дані по містах (для довідки, не перелічуй усі):
-{weather_summary_for_prompt}"""
-
-        prompt = f"""Ти фінансовий коментатор агроринку України.
-Тобі надані зміни цін за сьогодні: курси валют, паливо, зерно, куряче філе, філе індички, яйця.
-
-Важливо: якщо курс USD або EUR до гривні зріс — це означає що гривня ослабла. Якщо впав — гривня зміцніла.
-
-{market_data_for_prompt}
-{weather_block}
-
-Напиши ОДНЕ речення — що є найважливішим рухом або трендом сьогодні.
-Якщо є суттєві погодні сигнали вище (значний перепад температур або дощ по всій країні) —
-згадай саме це, бо це прямо впливає на птахівництво (тепловий стрес, вентиляція).
-Якщо погодних сигналів немає — пиши тільки про ринок, не згадуй погоду взагалі.
-Без цифр, без порад, без звернень типу "рекомендую" або "зверніть увагу".
-Якщо нічого суттєвого немає ні на ринку, ні в погоді — напиши: "Спокійний день, суттєвих рухів немає.\""""
-
-        resp = client.models.generate_content(
-            model="gemini-2.5-flash-lite",
-            contents=prompt
-        )
-
-        comment_text = resp.text.strip().replace('\n', ' ').replace('  ', ' ')
-        comment_text = comment_text.strip('"').strip("'").strip()
-
-        if len(comment_text) > 300:
-            comment_text = comment_text[:297].rsplit(' ', 1)[0] + "..."
-
-        logger.info(f"✅ Коментар Gemini: {len(comment_text)} симв.")
-        comment = f"\n\n📌 <b>КОМЕНТАР:</b> {comment_text}"
-
-    except Exception as e:
-        logger.error(f"❌ Gemini: {e}")
-        comment = "\n\n📌 <b>КОМЕНТАР:</b> Спокійний день, суттєвих рухів немає."
 
     # --- Збираємо фінальне повідомлення ---
     result = report
     if grain_info:
         result += f"\n{grain_info}"
-    result += comment
     result += "\n\n<b>Вдалого господарювання! 🐔</b>"
 
     return result
