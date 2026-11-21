@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 WHEAT_BUSHELS_PER_TON = 36.74
 CORN_BUSHELS_PER_TON = 39.37
+SOY_BUSHELS_PER_TON = 36.74
 RATES_FILE = "rates_history.json"
 FUEL_FILE = "fuel_history.json"
 POULTRY_FILE = "poultry_prices_history.json"
@@ -24,10 +25,15 @@ POULTRY_FILE = "poultry_prices_history.json"
 CONTRACT_MONTHS = [
     (3, "H"), (5, "K"), (7, "N"), (9, "U"), (12, "Z")
 ]
+# Соя на CBOT має інший набір місяців: F=січень H=березень K=травень N=липень
+#   Q=серпень U=вересень X=листопад
+SOY_CONTRACT_MONTHS = [
+    (1, "F"), (3, "H"), (5, "K"), (7, "N"), (8, "Q"), (9, "U"), (11, "X")
+]
 ROLLOVER_DAYS_BEFORE = 25  # за скільки днів до 1-го числа місяця контракту переходимо на нього
 
 
-def get_active_contract_code(today=None):
+def get_active_contract_code(today=None, months=None):
     """
     Повертає код контракту (наприклад 'N26') для поточної дати —
     найближчий контракт, до початку місяця якого лишається
@@ -35,12 +41,14 @@ def get_active_contract_code(today=None):
     """
     if today is None:
         today = datetime.now()
+    if months is None:
+        months = CONTRACT_MONTHS
 
     candidates = []
     # Будуємо список контрактів на 2 роки вперед щоб точно перекрити поточну дату
     for year_offset in (0, 1):
         year = today.year + year_offset
-        for month, letter in CONTRACT_MONTHS:
+        for month, letter in months:
             delivery_start = datetime(year, month, 1)
             rollover_date = delivery_start - timedelta(days=ROLLOVER_DAYS_BEFORE)
             candidates.append((rollover_date, delivery_start, letter, year))
@@ -65,6 +73,12 @@ def get_grain_tickers():
     wheat_ticker = f"ZW{code}.CBT"
     corn_ticker = f"ZC{code}.CBT"
     return wheat_ticker, corn_ticker
+
+
+def get_soy_ticker():
+    """Тикер сої (CBOT) на основі поточної дати, зі своїм набором місяців"""
+    code = get_active_contract_code(months=SOY_CONTRACT_MONTHS)
+    return f"ZS{code}.CBT"
 
 
 # Конкретні сторінки товарів на Novus — щоденні ціни
@@ -317,6 +331,31 @@ def get_grain_prices():
     except Exception as e:
         logger.error(f"Помилка отримання кукурудзи ({corn_ticker}): {e}")
 
+    soy_ticker = get_soy_ticker()
+    logger.info(f"📋 Активний контракт сої: {soy_ticker}")
+    try:
+        soy = yf.Ticker(soy_ticker)
+        so = soy.history(period="5d")
+        if len(so) >= 2:
+            price_now = so["Close"].iloc[-1]
+            price_prev = so["Close"].iloc[-2]
+            price_usd = (price_now / 100) * SOY_BUSHELS_PER_TON
+            change = ((price_now - price_prev) / price_prev) * 100
+
+            if abs(change) > MAX_REASONABLE_CHANGE:
+                logger.warning(f"⚠️ Соя: аномальна зміна {change:.1f}% — можливо проблема з контрактом {soy_ticker}")
+                results.append(("🫘 Соя", price_usd, None, ""))
+            else:
+                emoji = "📈" if change > 0 else "📉" if change < 0 else "➡️"
+                results.append(("🫘 Соя", price_usd, change, emoji))
+        elif len(so) == 1:
+            price_usd = (so["Close"].iloc[-1] / 100) * SOY_BUSHELS_PER_TON
+            results.append(("🫘 Соя", price_usd, None, ""))
+        else:
+            logger.warning(f"⚠️ Соя: контракт {soy_ticker} не повернув даних")
+    except Exception as e:
+        logger.error(f"Помилка отримання сої ({soy_ticker}): {e}")
+
     return results
 
 
@@ -376,7 +415,7 @@ async def get_grain_context():
                     lines.append(f"{name}: ~${price_usd:.0f}/т  <b>{price_uah:,.0f} грн/т</b>")
             grain_block = "📊 <b>Зерно (CME, $/т):</b>\n" + "\n".join(lines)
         else:
-            grain_block = "<b>🌾 Зерновий ринок:</b>\n• <a href='https://www.cmegroup.com/markets/agriculture/grains/wheat.quotes.html'>Пшениця</a>\n• <a href='https://www.cmegroup.com/markets/agriculture/grains/corn.quotes.html'>Кукурудза</a>"
+            grain_block = "<b>🌾 Зерновий ринок:</b>\n• <a href='https://www.cmegroup.com/markets/agriculture/grains/wheat.quotes.html'>Пшениця</a>\n• <a href='https://www.cmegroup.com/markets/agriculture/grains/corn.quotes.html'>Кукурудза</a>\n• <a href='https://www.cmegroup.com/markets/agriculture/oilseeds/soybean.quotes.html'>Соя</a>"
 
         # --- Ціни на продукцію птахівництва (Novus) ---
         prev_poultry = load_prev_poultry()
